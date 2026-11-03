@@ -1,0 +1,3 @@
+Main dashboard component: src/App.jsx
+Firebase initialization: src/firebase.js
+Styling for app shell and dashboard components is currently embedded in src/App.jsx.

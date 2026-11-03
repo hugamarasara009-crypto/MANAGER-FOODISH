@@ -1,0 +1,11 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // SAFE DEFAULT: deny all database access.
+    // Configure verified admin authentication and role-based rules before use.
+    // Do NOT replace this with allow read, write: if true.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
