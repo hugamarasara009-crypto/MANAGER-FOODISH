@@ -1,10 +1,10 @@
-import { initializeApp, getApps } from "firebase/app";
+```javascript
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-// Copy .env.example to .env and fill in your Firebase Web App values.
-// These browser config values identify the Firebase project; Firestore Security
-// Rules are what protect your database.
+// Firebase Web App Configuration
+// Values are loaded from Vercel Environment Variables or local .env
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -14,16 +14,28 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
+// Validate Firebase configuration
 const missing = Object.entries(firebaseConfig)
-  .filter(([, value]) => !value)
+  .filter(([, value]) => !value || !String(value).trim())
   .map(([key]) => key);
 
-if (missing.length) {
-  console.warn(
-    `Firebase configuration is incomplete. Add these VITE_ values to .env: ${missing.join(", ")}`
+if (missing.length > 0) {
+  throw new Error(
+    `Firebase configuration is incomplete. Missing: ${missing.join(", ")}`
   );
 }
 
-const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+// Initialize Firebase only once
+const app = getApps().length > 0
+  ? getApp()
+  : initializeApp(firebaseConfig);
+
+// Initialize Firebase Authentication
 export const auth = getAuth(app);
+
+// Initialize Cloud Firestore
 export const db = getFirestore(app);
+
+// Export Firebase app
+export default app;
+```
