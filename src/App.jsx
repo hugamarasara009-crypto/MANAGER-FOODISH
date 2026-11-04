@@ -27,6 +27,7 @@ const COLLECTIONS = {
   admins: "admins",
   management: "management_entries",
   online: "online_entries",
+  locations: "locations",
 };
 
 const money = (value) =>
@@ -43,8 +44,6 @@ const asDate = (value) => {
 };
 
 const dateKey = (value) => {
-  // Firestore ledger dates are stored as YYYY-MM-DD strings; preserve them
-  // instead of parsing them as UTC and shifting the date in Bangladesh.
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
   const date = asDate(value);
   if (!date) return "";
@@ -106,11 +105,23 @@ function App() {
   const [riders, setRiders] = useState([]);
   const [managementEntries, setManagementEntries] = useState([]);
   const [onlineEntries, setOnlineEntries] = useState([]);
+  const [locationsData, setLocationsData] = useState([]);
 
   const [page, setPage] = useState("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [restaurantId, setRestaurantId] = useState("");
   const [riderId, setRiderId] = useState("");
+
+  // Multi-select restaurant state with LocalStorage persistence
+  const [selectedRestaurantIds, setSelectedRestaurantIds] = useState(() => {
+    try {
+      const saved = localStorage.getItem("cityfood_selected_restaurants");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [selectedDate, setSelectedDate] = useState(todayKey());
   const [historyStart, setHistoryStart] = useState(todayKey());
   const [historyEnd, setHistoryEnd] = useState(todayKey());
@@ -119,12 +130,19 @@ function App() {
 
   const [entryAmount, setEntryAmount] = useState("");
   const [entryNote, setEntryNote] = useState("");
-  const [entryType, setEntryType] = useState("collection");
   const [riderCollectionAmount, setRiderCollectionAmount] = useState("");
   const [riderFineAmount, setRiderFineAmount] = useState("");
   const [riderSalaryAmount, setRiderSalaryAmount] = useState("");
   const [onlineAmount, setOnlineAmount] = useState("");
   const [onlineNote, setOnlineNote] = useState("");
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cityfood_selected_restaurants", JSON.stringify(selectedRestaurantIds));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [selectedRestaurantIds]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -135,7 +153,7 @@ function App() {
         return;
       }
       try {
-        if (!currentUser.email) throw new Error("Google account email পাওয়া যায়নি।");
+        if (!currentUser.email) throw new Error("Google account email paoya jayni.");
         const adminQuery = query(
           collection(db, COLLECTIONS.admins),
           where("email", "==", currentUser.email.toLowerCase()),
@@ -145,7 +163,7 @@ function App() {
         if (adminSnapshot.empty) {
           await signOut(auth);
           setUser(null);
-          setAuthError(`${currentUser.email} admins collection-এ অনুমোদিত নয়। Admins collection-এ এই Gmail address যোগ করুন।`);
+          setAuthError(`${currentUser.email} admins collection-e anumatito noy.`);
           setAuthReady(true);
           return;
         }
@@ -186,9 +204,7 @@ function App() {
         },
         (error) => {
           if (!optional) {
-            setDataError(
-              `${name}: ${error.message}. Check the collection name and Firestore security rules.`
-            );
+            setDataError(`${name}: ${error.message}.`);
           }
           setter([]);
           setLoading(false);
@@ -202,6 +218,7 @@ function App() {
     subscribe(COLLECTIONS.riders, setRiders);
     subscribe(COLLECTIONS.management, setManagementEntries, true);
     subscribe(COLLECTIONS.online, setOnlineEntries, true);
+    subscribe(COLLECTIONS.locations, setLocationsData, true);
 
     return () => unsubs.forEach((unsubscribe) => unsubscribe());
   }, [user]);
@@ -223,6 +240,87 @@ function App() {
   useEffect(() => {
     if (!riderId && riders.length) setRiderId(riders[0].id);
   }, [riders, riderId]);
+
+  // Robust handler: first fetch/gather all locations & sublocations, then update selected restaurants
+  async function handleBulkRestaurantAction(turnOn) {
+    if (!selectedRestaurantIds.length) {
+      setNotice({ type: "error", text: "Prothomay kompokhe ekti restaurant select korun." });
+      return;
+    }
+    setSaving(true);
+    try {
+      let collectedLocations = [];
+
+      // 1. Gather location names and subLocations from 'locations' collection (as seen in Firestore screenshot)
+      if (locationsData && locationsData.length > 0) {
+        locationsData.forEach((loc) => {
+          const locName = loc.name || loc.id;
+          if (locName) collectedLocations.push(locName);
+          if (Array.isArray(loc.subLocations)) {
+            loc.subLocations.forEach((sub) => {
+              if (sub) collectedLocations.push(sub);
+            });
+          }
+        });
+      }
+
+      // 2. Fallback to existing restaurants availableLocations if locationsData is empty
+      if (collectedLocations.length === 0) {
+        restaurants.forEach((r) => {
+          if (Array.isArray(r.availableLocations)) {
+            r.availableLocations.forEach((loc) => collectedLocations.push(loc));
+          } else if (typeof r.availableLocations === "string") {
+            collectedLocations.push(r.availableLocations);
+          }
+        });
+      }
+
+      // Unique locations array
+      const finalAllLocations = Array.from(new Set(collectedLocations));
+      const fallbackList = finalAllLocations.length > 0 ? finalAllLocations : ["Ashulia", "Daffodil Smart City", "Savar"];
+
+      const updatePromises = selectedRestaurantIds.map(async (resId) => {
+        const resDocRef = doc(db, COLLECTIONS.restaurants, resId);
+        const payload = turnOn
+          ? {
+              open: "yes",
+              priority: 0,
+              availableLocations: fallbackList,
+            }
+          : {
+              open: "no",
+              priority: 1000,
+            };
+        await updateDoc(resDocRef, payload);
+      });
+
+      await Promise.all(updatePromises);
+      setNotice({
+        type: "success",
+        text: turnOn
+          ? "Selected restaurant-gula open hoiche, priority 0 ebong sob locations & sub-locations select kora hoiche!"
+          : "Selected restaurant-gula off hoiche ebong priority 1000 kora hoiche.",
+      });
+    } catch (error) {
+      setNotice({ type: "error", text: `Action failed: ${error.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const toggleRestaurantSelection = (id) => {
+    setSelectedRestaurantIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const selectAllRestaurants = () => {
+    setSelectedRestaurantIds(restaurants.map((r) => r.id));
+  };
+
+  const clearSelectedRestaurants = () => {
+    setSelectedRestaurantIds([]);
+  };
 
   const todaysOrders = useMemo(
     () => orders.filter((order) => dateKey(order.createdAt) === todayKey()),
@@ -281,15 +379,6 @@ function App() {
   const riderCollectionTotal = riderDateEntries.filter((entry) => ["collection", "physical"].includes(normalized(entry.type))).reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
   const riderFineTotal = riderDateEntries.filter((entry) => normalized(entry.type) === "fine").reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
   const riderSalaryTotal = riderDateEntries.filter((entry) => normalized(entry.type) === "salary").reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-
-  const selectedManagement = managementEntries.filter(
-    (entry) =>
-      dateKey(entry.date || entry.createdAt) === selectedDate &&
-      (historyType === "rider"
-        ? entry.entityType === "rider" && String(entry.entityId) === String(riderId)
-        : entry.entityType === "restaurant" &&
-          String(entry.entityId) === String(restaurantId))
-  );
 
   const bKashTotal = onlineEntries
     .filter((entry) => normalized(entry.method) === "bkash")
@@ -411,7 +500,6 @@ function App() {
     };
     if (matching.length) {
       await updateDoc(doc(db, COLLECTIONS.management, matching[0].id), payload);
-      // Clean up any old duplicate rows of the same date/type.
       await Promise.all(matching.slice(1).map((entry) => deleteDoc(doc(db, COLLECTIONS.management, entry.id))));
     } else {
       await addDoc(collection(db, COLLECTIONS.management), {
@@ -437,7 +525,7 @@ function App() {
         ].filter((entry) => entry.amount !== "");
 
     if (!entriesToSave.length || entriesToSave.some((entry) => entry.amount === "" || !Number.isFinite(Number(entry.amount)) || Number(entry.amount) < 0)) {
-      setNotice({ type: "error", text: "কমপক্ষে একটি সঠিক amount লিখুন।" });
+      setNotice({ type: "error", text: "Sothik amount din." });
       return;
     }
 
@@ -457,7 +545,7 @@ function App() {
       setRiderFineAmount("");
       setRiderSalaryAmount("");
       setEntryNote("");
-      setNotice({ type: "success", text: "হিসাব সংরক্ষণ হয়েছে। আগের একই তারিখের entry replace করা হয়েছে।" });
+      setNotice({ type: "success", text: "Hisab songrokkhon hoyeche." });
     } catch (error) {
       setNotice({ type: "error", text: `Save failed: ${error.message}` });
     } finally {
@@ -468,7 +556,7 @@ function App() {
   async function saveOnlineEntry(event) {
     event.preventDefault();
     if (!onlineAmount || Number(onlineAmount) < 0) {
-      setNotice({ type: "error", text: "একটি সঠিক amount লিখুন।" });
+      setNotice({ type: "error", text: "Sothik amount din." });
       return;
     }
     setSaving(true);
@@ -491,7 +579,7 @@ function App() {
   }
 
   async function removeEntry(collectionName, id) {
-    if (!window.confirm("এই এন্ট্রিটি স্থায়ীভাবে delete করবেন?")) return;
+    if (!window.confirm("Ei entry-ti delete korben?")) return;
     try {
       await deleteDoc(doc(db, collectionName, id));
       setNotice({ type: "success", text: "Entry deleted successfully." });
@@ -503,6 +591,7 @@ function App() {
   const navItems = [
     ["overview", "Overview", "◫"],
     ["restaurants", "Restaurants", "▤"],
+    ["bulk", "Bulk Management", "⚙"], // Added dedicated Bulk Management page in Sidebar
     ["riders", "Riders", "♧"],
     ["online", "Online Accounts", "৳"],
     ["history", "History & Reports", "▦"],
@@ -525,26 +614,20 @@ function App() {
             <div className="login-kicker">ACCOUNTS & OPERATIONS CONSOLE</div>
             <div className="login-divider" />
             <h1>Welcome back</h1>
-            <p className="login-description">
-              আপনার CityFood Admin account দিয়ে নিরাপদে লগইন করুন।
-            </p>
-
+            <p className="login-description">Apnar CityFood Admin account diye login korun.</p>
             {authError && (
               <div className="login-error" role="alert">
                 <strong>Login failed</strong>
                 <span>{authError}</span>
               </div>
             )}
-
             <button className="google-login-button" onClick={handleGoogleLogin}>
               <span className="google-g" aria-hidden="true">G</span>
               <span>Continue with Google</span>
               <span className="google-arrow" aria-hidden="true">→</span>
             </button>
-
             <div className="login-security">
-              <span className="security-dot" />
-              Secure access for authorized administrators only
+              <span className="security-dot" /> Secure access for authorized administrators only
             </div>
           </main>
           <footer className="login-footer">© {new Date().getFullYear()} CityFood · Internal use only</footer>
@@ -619,7 +702,7 @@ function App() {
 
         {page === "overview" && (
           <section className="content">
-            <div className="section-heading"><div><h2>Daily performance</h2><p>আজকের অর্ডার ও আর্থিক অবস্থার সারাংশ</p></div><span className="date-label">{new Date().toLocaleDateString("en-BD", { dateStyle: "full" })}</span></div>
+            <div className="section-heading"><div><h2>Daily performance</h2><p>Ajker order o financial sarangsho</p></div><span className="date-label">{new Date().toLocaleDateString("en-BD", { dateStyle: "full" })}</span></div>
             <div className="stats-grid">
               <StatCard label="Delivered total" value={money(deliveredTotal)} hint={`${deliveredToday.length} delivered orders`} icon="↗" tone="green" />
               <StatCard label="Cancelled total" value={money(cancelledTotal)} hint={`${cancelledToday.length} cancelled orders`} icon="×" tone="red" />
@@ -633,9 +716,63 @@ function App() {
           </section>
         )}
 
+        {/* Dedicated Bulk Restaurant Management Page */}
+        {page === "bulk" && (
+          <section className="content">
+            <div className="section-heading">
+              <div>
+                <h2>Bulk Restaurant Management</h2>
+                <p>Multi-select restaurants and apply open status, priority 0, and all locations/sub-locations instantly</p>
+              </div>
+            </div>
+
+            <div className="panel bulk-action-panel">
+              <div className="panel-head">
+                <div>
+                  <h3>Restaurant Controls</h3>
+                  <p>Select restaurants below and trigger Turn On or Turn Off</p>
+                </div>
+                <div className="bulk-actions-btns">
+                  <button type="button" className="primary-btn on-btn" onClick={() => handleBulkRestaurantAction(true)} disabled={saving}>
+                    {saving ? "Processing..." : "Turn On (Open, Priority 0, All Locations)"}
+                  </button>
+                  <button type="button" className="primary-btn off-btn" onClick={() => handleBulkRestaurantAction(false)} disabled={saving}>
+                    {saving ? "Processing..." : "Turn Off (Close, Priority 1000)"}
+                  </button>
+                </div>
+              </div>
+              <div className="selection-controls">
+                <button type="button" className="text-btn" onClick={selectAllRestaurants}>Select All</button>
+                <button type="button" className="text-btn" onClick={clearSelectedRestaurants}>Clear Selection</button>
+                <span className="count-pill">{selectedRestaurantIds.length} restaurants selected</span>
+              </div>
+              <div className="multi-select-grid">
+                {restaurants.map((res) => {
+                  const isSelected = selectedRestaurantIds.includes(res.id);
+                  return (
+                    <div
+                      key={res.id}
+                      className={`restaurant-checkbox-card ${isSelected ? "selected" : ""}`}
+                      onClick={() => toggleRestaurantSelection(res.id)}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                      />
+                      <span>{res.name || res.id}</span>
+                      <small className="cell-sub">Status: {res.open || "N/A"} | Priority: {res.priority ?? "N/A"}</small>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+        )}
+
         {page === "restaurants" && (
           <section className="content">
-            <div className="section-heading"><div><h2>Restaurant accounts</h2><p>রেস্টুরেন্টভিত্তিক বিক্রয় ও physical cash ledger</p></div></div>
+            <div className="section-heading"><div><h2>Restaurant accounts</h2><p>Restaurant-based sales and physical cash ledger</p></div></div>
             <div className="filter-bar">
               <label>Restaurant<select value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)}>{restaurants.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}</select></label>
               <label>Account date<input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} /></label>
@@ -646,11 +783,11 @@ function App() {
               <StatCard label="Matching orders" value={restaurantOrders.length} hint="Orders containing this restaurant's items" icon="▤" tone="purple" />
             </div>
             <div className="panel">
-              <div className="panel-head"><div><h3>Restaurant order list</h3><p>Delivery charge ও service charge বাদ দিয়ে item subtotal</p></div></div>
+              <div className="panel-head"><div><h3>Restaurant order list</h3><p>Item subtotal excluding delivery and service charges</p></div></div>
               <RestaurantOrderTable orders={restaurantOrders} />
             </div>
             <div className="panel">
-              <div className="panel-head"><div><h3>Physical account entry</h3><p>রেস্টুরেন্ট থেকে পাওয়া বা দেওয়া টাকার হিসাব</p></div></div>
+              <div className="panel-head"><div><h3>Physical account entry</h3><p>Cash ledger entries for restaurant</p></div></div>
               <EntryForm amount={entryAmount} setAmount={setEntryAmount} note={entryNote} setNote={setEntryNote} onSubmit={saveManagementEntry} saving={saving} submitLabel="Save / Replace physical entry" />
               <EntryTable entries={managementEntries.filter((e) => e.entityType === "restaurant" && String(e.entityId) === String(restaurantId) && dateKey(e.date || e.createdAt) === selectedDate)} onDelete={(id) => removeEntry(COLLECTIONS.management, id)} />
             </div>
@@ -659,7 +796,7 @@ function App() {
 
         {page === "riders" && (
           <section className="content">
-            <div className="section-heading"><div><h2>Rider accounts</h2><p>COD collection, fine এবং daily salary tracking</p></div></div>
+            <div className="section-heading"><div><h2>Rider accounts</h2><p>COD collection, fine and daily salary tracking</p></div></div>
             <div className="filter-bar">
               <label>Rider<select value={riderId} onChange={(e) => setRiderId(e.target.value)}>{riders.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}</select></label>
               <label>Account date<input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} /></label>
@@ -671,7 +808,7 @@ function App() {
               <StatCard label="Delivered COD handled" value={money(riderCOD)} hint={`${riderOrders.length} delivered orders`} icon="✓" tone="green" />
             </div>
             <div className="panel">
-              <div className="panel-head"><div><h3>Daily account entry</h3><p>Collection, fine এবং salary আলাদাভাবে সংরক্ষণ করুন</p></div></div>
+              <div className="panel-head"><div><h3>Daily account entry</h3><p>Record collection, fine and salary separately</p></div></div>
               <form className="entry-form rider-entry-form" onSubmit={saveManagementEntry}>
                 <label>Total collection (৳)<input type="number" min="0" step="0.01" value={riderCollectionAmount} onChange={(e) => setRiderCollectionAmount(e.target.value)} placeholder="Collection amount" /></label>
                 <label>Fine (৳)<input type="number" min="0" step="0.01" value={riderFineAmount} onChange={(e) => setRiderFineAmount(e.target.value)} placeholder="Fine amount" /></label>
@@ -687,7 +824,7 @@ function App() {
 
         {page === "online" && (
           <section className="content">
-            <div className="section-heading"><div><h2>Online accounts</h2><p>bKash এবং Nagad transaction ledger</p></div></div>
+            <div className="section-heading"><div><h2>Online accounts</h2><p>bKash and Nagad transaction ledger</p></div></div>
             <div className="stats-grid">
               <StatCard label="Total bKash" value={money(bKashTotal)} hint="All saved entries" icon="B" tone="pink" />
               <StatCard label="Total Nagad" value={money(nagadTotal)} hint="All saved entries" icon="N" tone="orange" />
@@ -709,7 +846,7 @@ function App() {
 
         {page === "history" && (
           <section className="content">
-            <div className="section-heading"><div><h2>History & reports</h2><p>Date range অনুযায়ী consolidated accounts report</p></div></div>
+            <div className="section-heading"><div><h2>History & reports</h2><p>Date range-based consolidated accounts report</p></div></div>
             <div className="filter-bar">
               <label>Account type<select value={historyType} onChange={(e) => setHistoryType(e.target.value)}><option value="restaurant">Restaurant</option><option value="rider">Rider</option><option value="online">Online</option></select></label>
               {historyType === "restaurant" && <label>Restaurant<select value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)}>{restaurants.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}</select></label>}
@@ -721,7 +858,7 @@ function App() {
               <div className="panel-head"><div><h3>Date-wise summary</h3><p>Selected period totals</p></div><span className="count-pill">{historyRows.length} days</span></div>
               <div className="table-wrap"><table><thead><tr><th>Date</th>{historyType === "restaurant" && <th>Item sales</th>}{historyType !== "online" && <><th>Collection</th>{historyType === "rider" && <th>COD amount</th>}<th>Fine</th><th>Salary</th></>}{historyType === "online" && <><th>bKash</th><th>Nagad</th></>}</tr></thead><tbody>{historyRows.map((row) => <tr key={row.date}><td>{row.date}</td>{historyType === "restaurant" && <td>{money(row.sales)}</td>}{historyType !== "online" && <><td>{money(row.collection)}</td>{historyType === "rider" && <td>{money(row.cod)}</td>}<td>{money(row.fine)}</td><td>{money(row.salary)}</td></>}{historyType === "online" && <><td>{money(row.bkash)}</td><td>{money(row.nagad)}</td></>}</tr>)}{!historyRows.length && <EmptyRow colSpan={historyType === "online" ? 3 : historyType === "restaurant" ? 5 : 4} />}</tbody>{historyRows.length > 0 && <tfoot><tr><th>Grand total</th>{historyType === "restaurant" && <th>{money(historyTotals.sales)}</th>}{historyType !== "online" && <><th>{money(historyTotals.collection)}</th>{historyType === "rider" && <th>{money(historyTotals.cod)}</th>}<th>{money(historyTotals.fine)}</th><th>{money(historyTotals.salary)}</th></>}{historyType === "online" && <><th>{money(historyTotals.bkash)}</th><th>{money(historyTotals.nagad)}</th></>}</tr></tfoot>}</table></div>
             </div>
-            <div className="panel"><div className="panel-head"><div><h3>Saved entries</h3><p>Selected date range-এর ledger records</p></div></div><EntryTable entries={historySavedEntries} onDelete={(id) => removeEntry(historyType === "online" ? COLLECTIONS.online : COLLECTIONS.management, id)} showMethod={historyType === "online"} /></div>
+            <div className="panel"><div className="panel-head"><div><h3>Saved entries</h3><p>Ledger records for selected date range</p></div></div><EntryTable entries={historySavedEntries} onDelete={(id) => removeEntry(historyType === "online" ? COLLECTIONS.online : COLLECTIONS.management, id)} showMethod={historyType === "online"} /></div>
           </section>
         )}
 
@@ -761,7 +898,7 @@ function EntryTable({ entries, onDelete, showMethod = false }) {
 const styles = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
 :root{font-family:'DM Sans',sans-serif;color:#172033;background:#f5f7fb;font-synthesis:none}
-*{box-sizing:border-box}body{margin:0}.app-shell{min-height:100vh;display:flex;background:#f5f7fb}.sidebar{width:250px;background:#111b2e;color:#d5deed;min-height:100vh;padding:27px 17px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:5}.brand{display:flex;align-items:center;gap:11px;padding:0 10px 37px}.brand-mark{width:39px;height:39px;border-radius:13px;background:linear-gradient(145deg,#35c98b,#16a875);display:grid;place-items:center;color:white;font-weight:800;font-size:22px}.brand strong{display:block;color:#fff;font:800 18px 'Plus Jakarta Sans'}.brand small{display:block;color:#8190a8;font-size:9px;letter-spacing:1.4px;margin-top:3px}.side-label,.eyebrow{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#8290a8}.side-label{padding:0 12px 12px}.sidebar nav{display:grid;gap:6px}.nav-link{border:0;background:transparent;color:#aab6c9;text-align:left;padding:12px;border-radius:10px;display:flex;align-items:center;gap:12px;font:600 13px 'DM Sans';cursor:pointer}.nav-link:hover{background:#1b2941;color:#fff}.nav-link.active{background:#203b3d;color:#6de0ad}.nav-icon{width:22px;text-align:center;font-size:18px}.sidebar-bottom{margin-top:auto;border-top:1px solid #26334a;padding:18px 10px 0;font-size:11px;color:#aab6c9}.sidebar-bottom small{display:block;color:#74839b;margin:7px 0 0 15px;font-size:10px}.online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#35cf8b;margin-right:7px}.main-area{margin-left:250px;width:calc(100% - 250px);min-width:0}.topbar{height:91px;background:#fff;border-bottom:1px solid #e9edf4;display:flex;align-items:center;justify-content:space-between;padding:0 36px;position:sticky;top:0;z-index:4}.topbar h1{font:800 21px 'Plus Jakarta Sans';margin:5px 0 0;color:#18243a}.eyebrow{color:#93a0b3;font-size:9px}.topbar-right{display:flex;align-items:center;gap:17px}.today-chip{font-size:11px;color:#64748b;background:#f2f8f5;padding:8px 12px;border-radius:20px}.today-chip span{color:#20b879;margin-right:5px}.avatar{width:34px;height:34px;background:#e6f6ef;color:#149966;border-radius:50%;display:grid;place-items:center;font-weight:800}.content{max-width:1440px;margin:0 auto;padding:30px 36px 18px}.section-heading{display:flex;justify-content:space-between;align-items:end;margin:0 0 22px}.section-heading h2{font:800 20px 'Plus Jakarta Sans';margin:0 0 5px}.section-heading p,.panel-head p{font-size:12px;color:#8a96a8;margin:0}.date-label{font-size:11px;color:#7c899d}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:20px}.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.stat-card{background:#fff;border:1px solid #e9edf4;border-radius:14px;padding:18px;min-width:0;box-shadow:0 2px 7px #14213b05}.stat-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:800;font-size:16px;margin-bottom:13px}.stat-icon.green{background:#e7f8f0;color:#17a66d}.stat-icon.red{background:#fff0ef;color:#e25b56}.stat-icon.blue{background:#eaf2ff;color:#4c7de1}.stat-icon.purple{background:#f2edff;color:#8a69d5}.stat-icon.pink{background:#fff0f6;color:#d94e93}.stat-icon.orange{background:#fff3e8;color:#d98835}.stat-label{font-size:11px;color:#8290a3;font-weight:600}.stat-value{font:800 23px 'Plus Jakarta Sans';color:#17243b;margin:5px 0}.stat-hint{font-size:10px;color:#9aa5b5}.panel{background:#fff;border:1px solid #e8edf4;border-radius:14px;margin-bottom:19px;padding:20px;box-shadow:0 2px 7px #14213b05;min-width:0}.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px}.panel-head h3{font:700 14px 'Plus Jakarta Sans';margin:0 0 5px}.count-pill{font-size:10px;background:#f1f5f9;color:#66758b;padding:6px 10px;border-radius:20px}.filter-bar{display:flex;align-items:end;gap:14px;flex-wrap:wrap;background:#fff;border:1px solid #e8edf4;border-radius:13px;padding:15px;margin-bottom:17px}.filter-bar label,.entry-form label{display:grid;gap:7px;color:#738096;font-size:10px;font-weight:700;min-width:160px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:38px;border:1px solid #e0e6ee;border-radius:8px;background:#fff;padding:0 10px;color:#25324a;font:500 12px 'DM Sans';outline:none}.filter-bar select:focus,.filter-bar input:focus,.entry-form input:focus,.entry-form select:focus{border-color:#32b982;box-shadow:0 0 0 3px #32b98218}.table-wrap{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;white-space:nowrap;text-align:left}th{font-size:9px;text-transform:uppercase;letter-spacing:.7px;color:#9aa5b5;background:#f8fafc;padding:11px 12px;font-weight:700}td{font-size:11px;color:#526076;padding:12px;border-bottom:1px solid #f0f2f6}tbody tr:last-child td{border-bottom:0}td strong{color:#27364d;font-size:11px}.right{text-align:right}.cell-sub{display:block;font-size:9px;color:#9aa5b5;margin-top:3px}.status{display:inline-flex;padding:4px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:capitalize}.status.good{background:#e8f8f0;color:#159b65}.status.bad{background:#fff0ef;color:#d85853}.status.pending{background:#fff7e8;color:#bb842b}.empty-cell{text-align:center;color:#9aa5b5;padding:28px}.entry-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:2px 0 18px}.entry-form label{flex:1}.entry-form .note-field{flex:2;min-width:190px}.rider-entry-form label{min-width:145px}.primary-btn{height:38px;padding:0 16px;background:#17a873;border:0;border-radius:8px;color:#fff;font:700 11px 'DM Sans';cursor:pointer;white-space:nowrap}.primary-btn:hover{background:#108d60}.primary-btn:disabled{opacity:.6;cursor:wait}.delete-btn{border:0;background:#fff1f0;color:#d35b54;border-radius:6px;padding:6px 8px;font-size:9px;font-weight:700;cursor:pointer}.tabs{display:flex;gap:6px;border-bottom:1px solid #edf0f5;margin:-2px 0 15px}.tabs button{background:none;border:0;padding:10px 17px;color:#8995a6;font:700 12px 'DM Sans';cursor:pointer;border-bottom:2px solid transparent}.tabs button.selected{color:#159b68;border-color:#20b77a}.compact{border:0;padding:0;margin:0 0 15px}.list-heading{margin-top:20px}.footer{text-align:center;color:#a4adbb;font-size:10px;padding:14px 20px 24px}.loading-line{height:3px;background:#e7f5ee;color:#258d65;font-size:10px;padding-left:36px}.loading-line span{display:block;height:3px;width:35%;background:#22b77b;animation:load 1.5s infinite}@keyframes load{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}.alert{margin:18px 36px 0;padding:12px 14px;border-radius:9px;font-size:11px}.error-alert{background:#fff0ef;color:#b94c47}.toast{position:fixed;right:24px;bottom:24px;z-index:20;background:#14243a;color:white;border-radius:10px;padding:13px 17px;box-shadow:0 12px 35px #14243b30;font-size:12px;display:flex;gap:9px;align-items:center;max-width:min(440px,calc(100vw - 32px));animation:pop .2s ease}.toast.success span{color:#56dfa1}.toast.error span{color:#ff8880}@keyframes pop{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}.saving-overlay{position:fixed;inset:0;background:#0e1a2b70;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;gap:12px;font-size:12px}.loader{width:31px;height:31px;border:3px solid #d9eee5;border-top-color:#18a873;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.boot-screen{min-height:100vh;display:grid;place-content:center;justify-items:center;gap:12px;background:#f5f7fb;color:#66758b;font:12px 'DM Sans'}.error-panel{max-width:480px;background:#fff;padding:25px;border:1px solid #f1cecb;border-radius:12px;color:#a74440}.error-panel h2{font-size:17px}.error-panel p{font-size:12px;line-height:1.6}
+*{box-sizing:border-box}body{margin:0}.app-shell{min-height:100vh;display:flex;background:#f5f7fb}.sidebar{width:250px;background:#111b2e;color:#d5deed;min-height:100vh;padding:27px 17px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:5}.brand{display:flex;align-items:center;gap:11px;padding:0 10px 37px}.brand-mark{width:39px;height:39px;border-radius:13px;background:linear-gradient(145deg,#35c98b,#16a875);display:grid;place-items:center;color:white;font-weight:800;font-size:22px}.brand strong{display:block;color:#fff;font:800 18px 'Plus Jakarta Sans'}.brand small{display:block;color:#8190a8;font-size:9px;letter-spacing:1.4px;margin-top:3px}.side-label,.eyebrow{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#8290a8}.side-label{padding:0 12px 12px}.sidebar nav{display:grid;gap:6px}.nav-link{border:0;background:transparent;color:#aab6c9;text-align:left;padding:12px;border-radius:10px;display:flex;align-items:center;gap:12px;font:600 13px 'DM Sans';cursor:pointer}.nav-link:hover{background:#1b2941;color:#fff}.nav-link.active{background:#203b3d;color:#6de0ad}.nav-icon{width:22px;text-align:center;font-size:18px}.sidebar-bottom{margin-top:auto;border-top:1px solid #26334a;padding:18px 10px 0;font-size:11px;color:#aab6c9}.sidebar-bottom small{display:block;color:#74839b;margin:7px 0 0 15px;font-size:10px}.online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#35cf8b;margin-right:7px}.main-area{margin-left:250px;width:calc(100% - 250px);min-width:0}.topbar{height:91px;background:#fff;border-bottom:1px solid #e9edf4;display:flex;align-items:center;justify-content:space-between;padding:0 36px;position:sticky;top:0;z-index:4}.topbar h1{font:800 21px 'Plus Jakarta Sans';margin:5px 0 0;color:#18243a}.eyebrow{color:#93a0b3;font-size:9px}.topbar-right{display:flex;align-items:center;gap:17px}.today-chip{font-size:11px;color:#64748b;background:#f2f8f5;padding:8px 12px;border-radius:20px}.today-chip span{color:#20b879;margin-right:5px}.avatar{width:34px;height:34px;background:#e6f6ef;color:#149966;border-radius:50%;display:grid;place-items:center;font-weight:800}.content{max-width:1440px;margin:0 auto;padding:30px 36px 18px}.section-heading{display:flex;justify-content:space-between;align-items:end;margin:0 0 22px}.section-heading h2{font:800 20px 'Plus Jakarta Sans';margin:0 0 5px}.section-heading p,.panel-head p{font-size:12px;color:#8a96a8;margin:0}.date-label{font-size:11px;color:#7c899d}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:20px}.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.stat-card{background:#fff;border:1px solid #e9edf4;border-radius:14px;padding:18px;min-width:0;box-shadow:0 2px 7px #14213b05}.stat-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:800;font-size:16px;margin-bottom:13px}.stat-icon.green{background:#e7f8f0;color:#17a66d}.stat-icon.red{background:#fff0ef;color:#e25b56}.stat-icon.blue{background:#eaf2ff;color:#4c7de1}.stat-icon.purple{background:#f2edff;color:#8a69d5}.stat-icon.pink{background:#fff0f6;color:#d94e93}.stat-icon.orange{background:#fff3e8;color:#d98835}.stat-label{font-size:11px;color:#8290a3;font-weight:600}.stat-value{font:800 23px 'Plus Jakarta Sans';color:#17243b;margin:5px 0}.stat-hint{font-size:10px;color:#9aa5b5}.panel{background:#fff;border:1px solid #e8edf4;border-radius:14px;margin-bottom:19px;padding:20px;box-shadow:0 2px 7px #14213b05;min-width:0}.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px}.panel-head h3{font:700 14px 'Plus Jakarta Sans';margin:0 0 5px}.count-pill{font-size:10px;background:#f1f5f9;color:#66758b;padding:6px 10px;border-radius:20px}.filter-bar{display:flex;align-items:end;gap:14px;flex-wrap:wrap;background:#fff;border:1px solid #e8edf4;border-radius:13px;padding:15px;margin-bottom:17px}.filter-bar label,.entry-form label{display:grid;gap:7px;color:#738096;font-size:10px;font-weight:700;min-width:160px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:38px;border:1px solid #e0e6ee;border-radius:8px;background:#fff;padding:0 10px;color:#25324a;font:500 12px 'DM Sans';outline:none}.filter-bar select:focus,.filter-bar input:focus,.entry-form input:focus,.entry-form select:focus{border-color:#32b982;box-shadow:0 0 0 3px #32b98218}.table-wrap{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;white-space:nowrap;text-align:left}th{font-size:9px;text-transform:uppercase;letter-spacing:.7px;color:#9aa5b5;background:#f8fafc;padding:11px 12px;font-weight:700}td{font-size:11px;color:#526076;padding:12px;border-bottom:1px solid #f0f2f6}tbody tr:last-child td{border-bottom:0}td strong{color:#27364d;font-size:11px}.right{text-align:right}.cell-sub{display:block;font-size:9px;color:#9aa5b5;margin-top:3px}.status{display:inline-flex;padding:4px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:capitalize}.status.good{background:#e8f8f0;color:#159b65}.status.bad{background:#fff0ef;color:#d85853}.status.pending{background:#fff7e8;color:#bb842b}.empty-cell{text-align:center;color:#9aa5b5;padding:28px}.entry-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:2px 0 18px}.entry-form label{flex:1}.entry-form .note-field{flex:2;min-width:190px}.rider-entry-form label{min-width:145px}.primary-btn{height:38px;padding:0 16px;background:#17a873;border:0;border-radius:8px;color:#fff;font:700 11px 'DM Sans';cursor:pointer;white-space:nowrap}.primary-btn:hover{background:#108d60}.primary-btn:disabled{opacity:.6;cursor:wait}.delete-btn{border:0;background:#fff1f0;color:#d35b54;border-radius:6px;padding:6px 8px;font-size:9px;font-weight:700;cursor:pointer}.tabs{display:flex;gap:6px;border-bottom:1px solid #edf0f5;margin:-2px 0 15px}.tabs button{background:none;border:0;padding:10px 17px;color:#8995a6;font:700 12px 'DM Sans';cursor:pointer;border-bottom:2px solid transparent}.tabs button.selected{color:#159b68;border-color:#20b77a}.compact{border:0;padding:0;margin:0 0 15px}.list-heading{margin-top:20px}.footer{text-align:center;color:#a4adbb;font-size:10px;padding:14px 20px 24px}.loading-line{height:3px;background:#e7f5ee;color:#258d65;font-size:10px;padding-left:36px}.loading-line span{display:block;height:3px;width:35%;background:#22b77b;animation:load 1.5s infinite}@keyframes load{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}.alert{margin:18px 36px 0;padding:12px 14px;border-radius:9px;font-size:11px}.error-alert{background:#fff0ef;color:#b94c47}.toast{position:fixed;right:24px;bottom:24px;z-index:20;background:#14243a;color:white;border-radius:10px;padding:13px 17px;box-shadow:0 12px 35px #14213b30;font-size:12px;display:flex;gap:9px;align-items:center;max-width:min(440px,calc(100vw - 32px));animation:pop .2s ease}.toast.success span{color:#56dfa1}.toast.error span{color:#ff8880}@keyframes pop{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}.saving-overlay{position:fixed;inset:0;background:#0e1a2b70;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;gap:12px;font-size:12px}.loader{width:31px;height:31px;border:3px solid #d9eee5;border-top-color:#18a873;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.boot-screen{min-height:100vh;display:grid;place-content:center;justify-items:center;gap:12px;background:#f5f7fb;color:#66758b;font:12px 'DM Sans'}.error-panel{max-width:480px;background:#fff;padding:25px;border:1px solid #f1cecb;border-radius:12px;color:#a74440}.error-panel h2{font-size:17px}.error-panel p{font-size:12px;line-height:1.6}
 .login-page{min-height:100vh;position:relative;isolation:isolate;overflow:hidden;display:grid;place-items:center;padding:32px 18px;background:radial-gradient(ellipse at 15% 10%,#e1f8ed 0,transparent 34%),radial-gradient(ellipse at 90% 90%,#e6edff 0,transparent 36%),linear-gradient(135deg,#f8fbff 0%,#f1f6f8 48%,#f8faff 100%);font-family:'DM Sans',sans-serif;color:#17243b}
 .login-glow{position:absolute;z-index:-1;border-radius:50%;filter:blur(2px);pointer-events:none}.login-glow-one{width:330px;height:330px;left:-130px;top:18%;background:#b8f0d7;opacity:.32}.login-glow-two{width:390px;height:390px;right:-150px;bottom:4%;background:#c8d8ff;opacity:.32}
 .login-card{width:min(100%,460px);padding:48px 44px 36px;border:1px solid #e7edf2;border-radius:25px;background:rgba(255,255,255,.92);box-shadow:0 24px 70px rgba(28,48,75,.11),0 3px 10px rgba(28,48,75,.04);text-align:center;backdrop-filter:blur(14px)}
@@ -780,76 +917,27 @@ const styles = `
 .login-security{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:22px;color:#96a2b1;font-size:10px}
 .security-dot{width:7px;height:7px;border-radius:50%;background:#20b77a;box-shadow:0 0 0 4px #e5f8ef}
 .login-footer{position:absolute;bottom:18px;left:12px;right:12px;text-align:center;color:#a1adba;font-size:10px}
+
+/* Bulk management extra styles */
+.bulk-action-panel { background: #fafbfc; border: 1px solid #e1e7ef; }
+.bulk-actions-btns { display: flex; gap: 10px; flex-wrap: wrap; }
+.on-btn { background: #17a873; }
+.off-btn { background: #e25b56; }
+.off-btn:hover { background: #c54843; }
+.selection-controls { display: flex; align-items: center; gap: 12px; margin-bottom: 15px; }
+.text-btn { background: none; border: 0; color: #18a873; font-weight: 700; font-size: 12px; cursor: pointer; padding: 0; }
+.text-btn:hover { text-decoration: underline; }
+.multi-select-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 350px; overflow-y: auto; padding: 4px; border: 1px solid #e9edf4; border-radius: 8px; background: #fff; }
+.restaurant-checkbox-card { display: flex; flex-direction: column; gap: 3px; padding: 10px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer; background: #fdfdfd; transition: all 0.15s ease; }
+.restaurant-checkbox-card:hover { border-color: #cbd5e1; background: #f8fafc; }
+.restaurant-checkbox-card.selected { border-color: #17a873; background: #f0fdf4; box-shadow: 0 0 0 1px #17a873; }
+.restaurant-checkbox-card span { font-weight: 700; font-size: 13px; color: #1e293b; }
+
 @media(max-width:520px){.login-page{padding:22px 14px 58px}.login-card{padding:37px 24px 29px;border-radius:20px}.login-card h1{font-size:24px}.login-brand-name{font-size:23px}.login-description{font-size:12px}}
 @media(max-width:1000px){.sidebar{width:210px}.main-area{margin-left:210px;width:calc(100% - 210px)}.content{padding:24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.sidebar{width:270px;max-width:82vw;padding:22px 17px;transform:translateX(-105%);transition:transform .32s cubic-bezier(.2,.8,.2,1);box-shadow:18px 0 50px #101b2e24}.sidebar.sidebar-open{transform:translateX(0)}.brand{padding:0 8px 30px}.brand>div:last-child,.side-label,.nav-link span:last-child,.sidebar-bottom{display:block}.nav-link{justify-content:flex-start;padding:14px 12px;min-height:46px}.main-area{margin-left:0;width:100%}.topbar{height:72px;padding:0 14px 0 58px;position:sticky}.mobile-menu-btn{display:grid;place-items:center;position:absolute;left:13px;top:18px;width:34px;height:34px;border:1px solid #e7edf2;border-radius:9px;background:#fff;color:#26364b;font-size:18px;cursor:pointer}.sidebar-scrim{display:block;position:fixed;inset:0;background:#0d1728a6;border:0;z-index:4;backdrop-filter:blur(2px)}.topbar h1{font-size:18px}.content{padding:20px 14px 30px}.section-heading{align-items:start;gap:10px;flex-direction:column}.section-heading h2{font-size:19px}.stats-grid,.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.stat-card{padding:15px;min-height:130px;border-radius:15px}.stat-icon{width:38px;height:38px}.stat-value{font-size:clamp(18px,5vw,23px)}.stat-label{font-size:11px}.stat-hint{font-size:10px;line-height:1.45}.panel{padding:15px;border-radius:14px}.filter-bar{padding:13px;gap:12px}.filter-bar label{flex:1 1 100%;min-width:0;font-size:11px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:44px;font-size:14px}.entry-form{display:grid;grid-template-columns:1fr;gap:13px}.entry-form label,.entry-form .note-field{min-width:0}.entry-form label{font-size:11px}.entry-form .primary-btn{width:100%;height:46px;font-size:13px}.primary-btn,.delete-btn{min-height:40px}.table-wrap{border-radius:9px}th{font-size:10px;padding:13px 12px}td{font-size:12px;padding:14px 12px}.date-label{font-size:11px}.alert{margin:12px 13px 0}.today-chip{font-size:10px;padding:8px}.avatar{width:34px;height:34px}.footer{padding-bottom:30px}}
 @media(min-width:681px){.mobile-menu-btn,.sidebar-scrim{display:none}}
 @media(max-width:380px){.stats-grid,.stats-grid.two{grid-template-columns:1fr}.stat-card{min-height:unset}.topbar-right{gap:8px}.today-chip{display:none}}
-/* Polished motion and touch feedback */
-.stat-card,.panel,.filter-bar,.nav-link,.primary-btn,.tabs button{transition:transform .22s ease,box-shadow .22s ease,border-color .22s ease,background .22s ease}
-.stat-card{animation:rise-in .45s both}.stat-card:nth-child(2){animation-delay:.05s}.stat-card:nth-child(3){animation-delay:.1s}.stat-card:nth-child(4){animation-delay:.15s}
-.panel{animation:rise-in .42s both}.stat-card:hover{transform:translateY(-3px);box-shadow:0 12px 28px #14213b10}.panel:hover{box-shadow:0 8px 24px #14213b0b}.primary-btn:active,.nav-link:active{transform:scale(.98)}
-@keyframes rise-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
-
-/* Global readability pass: stronger contrast, larger type, and clearer hierarchy on every page */
-body,.app-shell{font-size:15px;color:#17243b}
-.sidebar .nav-link{font-size:14px;font-weight:700;color:#d3ddec}
-.side-label{font-size:11px;font-weight:800;color:#aab8cd}
-.sidebar-bottom{font-size:12px;font-weight:600;color:#c4cfdf}
-.sidebar-bottom small{font-size:11px;color:#aab8cd}
-.topbar h1{font-size:23px;font-weight:800}
-.eyebrow{font-size:10px;font-weight:800;color:#74839a}
-.section-heading h2{font-size:22px;font-weight:800;color:#17243b}
-.section-heading p,.panel-head p{font-size:14px;font-weight:500;color:#64748b;line-height:1.55}
-.date-label{font-size:13px;font-weight:600;color:#64748b}
-.stat-label{font-size:13px;font-weight:700;color:#526176}
-.stat-value{font-size:25px;font-weight:800;color:#101d32}
-.stat-hint{font-size:12px;font-weight:600;color:#64748b;line-height:1.5}
-.panel-head h3{font-size:16px;font-weight:800;color:#17243b}
-.count-pill{font-size:12px;font-weight:700;color:#526176}
-.filter-bar label,.entry-form label{font-size:12px;font-weight:800;color:#526176}
-.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{font-size:14px;font-weight:600;color:#17243b}
-th{font-size:11px;font-weight:800;color:#64748b;letter-spacing:.65px}
-td{font-size:13px;font-weight:600;color:#34445c}
-td strong{font-size:13px;font-weight:800;color:#17243b}
-.cell-sub{font-size:11px;font-weight:600;color:#64748b}
-.status{font-size:11px;font-weight:800}
-.empty-cell{font-size:13px;font-weight:600;color:#64748b}
-.primary-btn{font-size:13px;font-weight:800}
-.delete-btn{font-size:11px;font-weight:800}
-.tabs button{font-size:14px;font-weight:800}
-.footer{font-size:12px;font-weight:600;color:#64748b}
-.today-chip{font-size:12px;font-weight:700;color:#526176}
-.avatar{font-size:15px;font-weight:800}
-.toast{font-size:14px;font-weight:700;line-height:1.5}
-.login-description{font-size:14px}
-.login-security{font-size:11px;font-weight:600}
-.login-error{font-size:13px}
-.login-error strong{font-size:14px}
-@media(max-width:680px){
-  body,.app-shell{font-size:16px}
-  .topbar h1{font-size:20px}
-  .eyebrow{font-size:10px}
-  .section-heading h2{font-size:21px}
-  .section-heading p,.panel-head p{font-size:14px}
-  .panel-head h3{font-size:17px}
-  .stat-label{font-size:13px}
-  .stat-value{font-size:clamp(20px,5.4vw,25px)}
-  .stat-hint{font-size:12px}
-  .filter-bar label,.entry-form label{font-size:13px}
-  .filter-bar select,.filter-bar input,.entry-form input,.entry-form select{font-size:16px}
-  th{font-size:11px}
-  td{font-size:13px}
-  td strong{font-size:13px}
-  .nav-link{font-size:15px;font-weight:700}
-  .sidebar-bottom{font-size:13px}
-  .sidebar-bottom small{font-size:12px}
-  .primary-btn{font-size:14px}
-  .delete-btn{font-size:12px}
-  .count-pill,.today-chip{font-size:12px}
-}
-
 `;
 
 export default App;
