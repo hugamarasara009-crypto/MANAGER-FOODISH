@@ -79,17 +79,21 @@ const isCOD = (order) => {
   return payment === "cod" || payment.includes("cash on delivery");
 };
 const orderAmount = (order) => Number(order.totalPrice || 0);
-const itemSubtotal = (items = [], restaurantName = "", restaurantId = "") =>
-  (Array.isArray(items) ? items : []).reduce((sum, item) => {
+
+const itemSubtotal = (items = [], restaurantName = "", restaurantId = "") => {
+  if (!Array.isArray(items)) return 0;
+  return items.reduce((sum, item) => {
     const itemRestaurant = normalized(item.miniResName || item.restaurantName);
-    const matchesName =
-      restaurantName && itemRestaurant === normalized(restaurantName);
-    const matchesId =
-      restaurantId &&
-      String(item.miniResId || item.restaurantId || "") === String(restaurantId);
-    if (!matchesName && !matchesId) return sum;
+    const itemResId = String(item.miniResId || item.restaurantId || "");
+    const matchesName = restaurantName && itemRestaurant === normalized(restaurantName);
+    const matchesId = restaurantId && itemResId === String(restaurantId);
+
+    if (restaurantName || restaurantId) {
+      if (!matchesName && !matchesId) return sum;
+    }
     return sum + Number(item.price || 0) * Number(item.quantity || 0);
   }, 0);
+};
 
 function App() {
   const [user, setUser] = useState(null);
@@ -112,7 +116,6 @@ function App() {
   const [restaurantId, setRestaurantId] = useState("");
   const [riderId, setRiderId] = useState("");
 
-  // Multi-select restaurant state with LocalStorage persistence
   const [selectedRestaurantIds, setSelectedRestaurantIds] = useState(() => {
     try {
       const saved = localStorage.getItem("cityfood_selected_restaurants");
@@ -121,6 +124,34 @@ function App() {
       return [];
     }
   });
+
+  const [paperWorkRiderIds, setPaperWorkRiderIds] = useState(() => {
+    try {
+      const saved = localStorage.getItem("cityfood_paperwork_riders");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [paperWorkDate, setPaperWorkDate] = useState(todayKey());
+
+  const [savedPaperWorkReports, setSavedPaperWorkReports] = useState(() => {
+    try {
+      const saved = localStorage.getItem("cityfood_saved_paperwork_reports");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cityfood_saved_paperwork_reports", JSON.stringify(savedPaperWorkReports));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [savedPaperWorkReports]);
 
   const [selectedDate, setSelectedDate] = useState(todayKey());
   const [historyStart, setHistoryStart] = useState(todayKey());
@@ -143,6 +174,14 @@ function App() {
       console.error(e);
     }
   }, [selectedRestaurantIds]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cityfood_paperwork_riders", JSON.stringify(paperWorkRiderIds));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [paperWorkRiderIds]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -241,7 +280,6 @@ function App() {
     if (!riderId && riders.length) setRiderId(riders[0].id);
   }, [riders, riderId]);
 
-  // Robust handler: first fetch/gather all locations & sublocations, then update selected restaurants
   async function handleBulkRestaurantAction(turnOn) {
     if (!selectedRestaurantIds.length) {
       setNotice({ type: "error", text: "Prothomay kompokhe ekti restaurant select korun." });
@@ -250,8 +288,6 @@ function App() {
     setSaving(true);
     try {
       let collectedLocations = [];
-
-      // 1. Gather location names and subLocations from 'locations' collection (as seen in Firestore screenshot)
       if (locationsData && locationsData.length > 0) {
         locationsData.forEach((loc) => {
           const locName = loc.name || loc.id;
@@ -264,7 +300,6 @@ function App() {
         });
       }
 
-      // 2. Fallback to existing restaurants availableLocations if locationsData is empty
       if (collectedLocations.length === 0) {
         restaurants.forEach((r) => {
           if (Array.isArray(r.availableLocations)) {
@@ -275,7 +310,6 @@ function App() {
         });
       }
 
-      // Unique locations array
       const finalAllLocations = Array.from(new Set(collectedLocations));
       const fallbackList = finalAllLocations.length > 0 ? finalAllLocations : ["Ashulia", "Daffodil Smart City", "Savar"];
 
@@ -314,12 +348,198 @@ function App() {
     );
   };
 
-  const selectAllRestaurants = () => {
-    setSelectedRestaurantIds(restaurants.map((r) => r.id));
+  const selectAllRestaurants = () => setSelectedRestaurantIds(restaurants.map((r) => r.id));
+  const clearSelectedRestaurants = () => setSelectedRestaurantIds([]);
+
+  const togglePaperWorkRider = (id) => {
+    setPaperWorkRiderIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+  const selectAllPaperWorkRiders = () => setPaperWorkRiderIds(riders.map((r) => r.id));
+  const clearPaperWorkRiders = () => setPaperWorkRiderIds([]);
+
+  async function handleUpdateSalary(riderIdToUpdate, newSalaryValue) {
+    setSaving(true);
+    try {
+      const existingEntry = managementEntries.find(
+        (entry) =>
+          entry.entityType === "rider" &&
+          String(entry.entityId) === String(riderIdToUpdate) &&
+          dateKey(entry.date || entry.createdAt) === paperWorkDate &&
+          normalized(entry.type) === "salary"
+      );
+
+      const riderObj = riders.find((r) => r.id === riderIdToUpdate);
+      const riderName = riderObj ? riderObj.name : "Rider";
+
+      const payload = {
+        entityType: "rider",
+        entityId: riderIdToUpdate,
+        entityName: riderName,
+        type: "salary",
+        amount: Number(newSalaryValue || 0),
+        date: paperWorkDate,
+        updatedAt: serverTimestamp(),
+      };
+
+      if (existingEntry) {
+        await updateDoc(doc(db, COLLECTIONS.management, existingEntry.id), payload);
+      } else {
+        await addDoc(collection(db, COLLECTIONS.management), {
+          ...payload,
+          createdAt: serverTimestamp(),
+        });
+      }
+      setNotice({ type: "success", text: "Salary updated successfully." });
+    } catch (error) {
+      setNotice({ type: "error", text: `Salary update failed: ${error.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const ridersWithBill = useMemo(() => {
+    return riders.map((r) => {
+      const riderOrders = orders.filter((o) => {
+        return (
+          String(o.riderId || "") === String(r.id) &&
+          dateKey(o.createdAt) === paperWorkDate &&
+          isDelivered(o)
+        );
+      });
+      const bill = riderOrders.reduce((sum, o) => sum + itemSubtotal(o.items), 0);
+      return { ...r, calculatedBill: bill };
+    }).sort((a, b) => b.calculatedBill - a.calculatedBill);
+  }, [riders, orders, paperWorkDate]);
+
+  const paperWorkTableRows = useMemo(() => {
+    return paperWorkRiderIds.map((rId) => {
+      const riderObj = riders.find((r) => r.id === rId);
+      const riderName = riderObj ? riderObj.name : rId;
+
+      const riderOrdersOnDate = orders.filter((o) => {
+        const matchesRider = String(o.riderId || "") === String(rId);
+        const matchesDate = dateKey(o.createdAt) === paperWorkDate;
+        const matchesDelivered = isDelivered(o);
+        return matchesRider && matchesDate && matchesDelivered;
+      });
+
+      const deliveredCount = riderOrdersOnDate.length;
+
+      const onlineAmount = riderOrdersOnDate
+        .filter((o) => !isCOD(o))
+        .reduce((sum, o) => sum + orderAmount(o), 0);
+
+      const billAmount = riderOrdersOnDate.reduce((sum, o) => {
+        return sum + itemSubtotal(o.items);
+      }, 0);
+
+      const totalOrderAmount = riderOrdersOnDate.reduce((sum, o) => sum + orderAmount(o), 0);
+      const chargeAmount = totalOrderAmount - billAmount;
+
+      const riderEntries = managementEntries.filter(
+        (e) =>
+          e.entityType === "rider" &&
+          String(e.entityId) === String(rId) &&
+          dateKey(e.date || e.createdAt) === paperWorkDate
+      );
+
+      const collectAmount = riderEntries
+        .filter((e) => ["collection", "physical"].includes(normalized(e.type)))
+        .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+      const salaryEntry = riderEntries.find((e) => normalized(e.type) === "salary");
+      const salaryAmount = salaryEntry ? Number(salaryEntry.amount || 0) : 0;
+
+      const fineAmount = riderEntries
+        .filter((e) => normalized(e.type) === "fine")
+        .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+      return {
+        riderId: rId,
+        name: riderName,
+        delivered: deliveredCount,
+        online: onlineAmount,
+        bill: billAmount,
+        charge: chargeAmount,
+        collect: collectAmount,
+        salary: salaryAmount,
+        fine: fineAmount,
+      };
+    });
+  }, [paperWorkRiderIds, paperWorkDate, orders, riders, managementEntries]);
+
+  const paperWorkTotals = useMemo(() => {
+    return paperWorkTableRows.reduce(
+      (acc, row) => ({
+        delivered: acc.delivered + row.delivered,
+        online: acc.online + row.online,
+        bill: acc.bill + row.bill,
+        charge: acc.charge + row.charge,
+        collect: acc.collect + row.collect,
+        salary: acc.salary + row.salary,
+        fine: acc.fine + row.fine,
+      }),
+      { delivered: 0, online: 0, bill: 0, charge: 0, collect: 0, salary: 0, fine: 0 }
+    );
+  }, [paperWorkTableRows]);
+
+  const calculatedProfit = useMemo(() => {
+    return (paperWorkTotals.bill * 0.094) + paperWorkTotals.charge;
+  }, [paperWorkTotals]);
+
+  // Save current Paper Work report permanently (Snapshot)
+  const saveCurrentPaperWorkReport = () => {
+    const reportData = {
+      id: `report-${paperWorkDate}-${Date.now()}`,
+      date: paperWorkDate,
+      savedAt: new Date().toISOString(),
+      rows: JSON.parse(JSON.stringify(paperWorkTableRows)), // Deep copy for permanent snapshot
+      totals: { ...paperWorkTotals },
+      profit: calculatedProfit,
+    };
+
+    setSavedPaperWorkReports((prev) => {
+      const filtered = prev.filter((item) => item.date !== paperWorkDate);
+      return [reportData, ...filtered];
+    });
+    setNotice({ type: "success", text: `Paper Work report for ${paperWorkDate} permanently saved!` });
   };
 
-  const clearSelectedRestaurants = () => {
-    setSelectedRestaurantIds([]);
+  // Delete saved report
+  const deleteSavedReport = (reportDate) => {
+    if (!window.confirm(`Are you sure you want to delete the saved report for ${reportDate}?`)) return;
+    setSavedPaperWorkReports((prev) => prev.filter((item) => item.date !== reportDate));
+    setNotice({ type: "success", text: "Saved report deleted successfully." });
+  };
+
+  const downloadSavedReportCSV = (report) => {
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += `Paper Work Report - Date: ${report.date}\n\n`;
+    csvContent += "Name,Delivered,Online,Bill,Charge,Salary,Fine\n";
+
+    report.rows.forEach((r) => {
+      csvContent += `"${r.name}",${r.delivered},${r.online},${r.bill},${r.charge},${r.salary},${r.fine}\n`;
+    });
+
+    csvContent += `\nAll Total,,${report.totals.online},${report.totals.bill},${report.totals.charge},${report.totals.salary},${report.totals.fine}\n`;
+    csvContent += `\nProfit Summary (Formula: Bill*9.4% + Charge),,${report.profit}\n`;
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `paper_work_report_${report.date}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const downloadSavedReportPDF = (report) => {
+    setPaperWorkDate(report.date);
+    setTimeout(() => {
+      window.print();
+    }, 200);
   };
 
   const todaysOrders = useMemo(
@@ -337,20 +557,19 @@ function App() {
   const restaurantOrders = useMemo(() => {
     if (!selectedRestaurant) return [];
     return orders
-      .filter((order) => dateKey(order.createdAt) === selectedDate)
+      .filter((order) => {
+        const matchesDate = dateKey(order.createdAt) === selectedDate;
+        const matchesDel = isDelivered(order);
+        const subtotal = itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id);
+        return matchesDate && matchesDel && subtotal > 0;
+      })
       .map((order) => ({
         ...order,
-        restaurantSubtotal: itemSubtotal(
-          order.items,
-          selectedRestaurant.name,
-          selectedRestaurant.id
-        ),
-      }))
-      .filter((order) => order.restaurantSubtotal > 0);
+        restaurantSubtotal: itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id),
+      }));
   }, [orders, selectedDate, selectedRestaurant]);
 
   const restaurantSales = restaurantOrders
-    .filter(isDelivered)
     .reduce((sum, order) => sum + order.restaurantSubtotal, 0);
 
   const riderOrders = useMemo(() => {
@@ -416,12 +635,11 @@ function App() {
       const key = dateKey(order.createdAt);
       if (!key || key < historyStart || key > historyEnd) return;
       if (historyType === "restaurant" && isDelivered(order)) {
-        const amount = itemSubtotal(
+        ensure(key).sales += itemSubtotal(
           order.items,
           selectedRestaurant?.name || "",
           selectedRestaurant?.id || ""
         );
-        ensure(key).sales += amount;
       }
     });
 
@@ -588,13 +806,15 @@ function App() {
     }
   }
 
+  // Exact navigation order requested: Overview, Restaurants, Riders, Online Accounts, History & Reports, Bulk Management, Paper Work[cite: 14]
   const navItems = [
     ["overview", "Overview", "◫"],
     ["restaurants", "Restaurants", "▤"],
-    ["bulk", "Bulk Management", "⚙"], // Added dedicated Bulk Management page in Sidebar
     ["riders", "Riders", "♧"],
     ["online", "Online Accounts", "৳"],
     ["history", "History & Reports", "▦"],
+    ["bulk", "Bulk Management", "⚙"],
+    ["paperwork", "Paper Work", "📄"],
   ];
 
   if (!authReady) {
@@ -712,6 +932,190 @@ function App() {
             <div className="panel">
               <div className="panel-head"><div><h3>Recent orders</h3><p>Latest orders from Firestore</p></div><span className="count-pill">{todaysOrders.length} today</span></div>
               <OrderTable orders={[...orders].sort((a,b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0)).slice(0, 8)} />
+            </div>
+          </section>
+        )}
+
+        {/* Paper Work Page with Permanent Save, Snapshot Archive, and Delete Option */}
+        {page === "paperwork" && (
+          <section className="content">
+            <div className="section-heading print-hide">
+              <div>
+                <h2>Paper Work & Profit Calculation</h2>
+                <p>Select riders, filter by date, view calculated metrics, manage salaries, and save permanent date-wise reports.</p>
+              </div>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button className="primary-btn" onClick={saveCurrentPaperWorkReport}>💾 Save Permanent Report for {paperWorkDate}</button>
+                <button className="primary-btn" onClick={() => window.print()}>Print / Download PDF View</button>
+              </div>
+            </div>
+
+            <div className="panel print-hide">
+              <div className="filter-bar">
+                <label>
+                  Paper Work Date
+                  <input type="date" value={paperWorkDate} onChange={(e) => setPaperWorkDate(e.target.value)} />
+                </label>
+              </div>
+
+              {/* Riders Multi-Select Cards with Date-wise Bill and Sorted */}
+              <div style={{ marginTop: "15px" }}>
+                <div className="panel-head">
+                  <h3>Select Riders ({paperWorkRiderIds.length} selected)</h3>
+                  <div className="bulk-actions-btns">
+                    <button type="button" className="text-btn" onClick={selectAllPaperWorkRiders}>Select All Riders</button>
+                    <button type="button" className="text-btn" onClick={clearPaperWorkRiders}>Clear Riders</button>
+                  </div>
+                </div>
+                <div className="multi-select-grid">
+                  {ridersWithBill.map((r) => {
+                    const isSelected = paperWorkRiderIds.includes(r.id);
+                    return (
+                      <div
+                        key={r.id}
+                        className={`restaurant-checkbox-card ${isSelected ? "selected" : ""}`}
+                        onClick={() => togglePaperWorkRider(r.id)}
+                      >
+                        <input type="checkbox" checked={isSelected} onChange={() => {}} />
+                        <span>{r.name || r.id}</span>
+                        <small className="cell-sub" style={{ color: "#16a34a", fontWeight: "700" }}>
+                          Bill ({paperWorkDate}): {money(r.calculatedBill)}
+                        </small>
+                        <small className="cell-sub">Phone: {r.phone || "N/A"}</small>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Saved Reports Archive List with Delete Option */}
+            {savedPaperWorkReports.length > 0 && (
+              <div className="panel print-hide">
+                <div className="panel-head">
+                  <div>
+                    <h3>Saved Paper Work Reports Archive (Permanent)</h3>
+                    <p>Download CSV/PDF or delete previously saved permanent reports</p>
+                  </div>
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Report Date</th>
+                        <th>Saved At</th>
+                        <th>Total Profit</th>
+                        <th className="right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {savedPaperWorkReports.map((rep) => (
+                        <tr key={rep.date}>
+                          <td><strong>{rep.date}</strong></td>
+                          <td>{formatDateTime(rep.savedAt)}</td>
+                          <td>{money(rep.profit)}</td>
+                          <td className="right" style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                            <button className="primary-btn" style={{ height: "30px", padding: "0 12px", fontSize: "11px" }} onClick={() => downloadSavedReportCSV(rep)}>
+                              📥 CSV
+                            </button>
+                            <button className="primary-btn" style={{ height: "30px", padding: "0 12px", fontSize: "11px", background: "#3b82f6" }} onClick={() => downloadSavedReportPDF(rep)}>
+                              🖨️ PDF
+                            </button>
+                            <button className="delete-btn" style={{ height: "30px", padding: "0 12px", fontSize: "11px" }} onClick={() => deleteSavedReport(rep.date)}>
+                              🗑️ Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Printable Area Wrapper for Table & Profit Summary */}
+            <div className="printable-report-area">
+              {/* Print Header: FOODISH STATEMENT & Date */}
+              <div className="print-only-header" style={{ display: "none", textAlign: "center", marginBottom: "25px" }}>
+                <h1 style={{ fontSize: "32px", fontWeight: "900", color: "#111b2e", margin: "0 0 5px", letterSpacing: "1px" }}>FOODISH STATEMENT</h1>
+                <p style={{ fontSize: "16px", fontWeight: "700", color: "#475569", margin: 0 }}>Date: {paperWorkDate}</p>
+              </div>
+
+              <div className="panel">
+                <div className="panel-head">
+                  <div>
+                    <h3>Performance & Ledger Table</h3>
+                    <p>Date: {paperWorkDate}</p>
+                  </div>
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Delivered</th>
+                        <th>Online</th>
+                        <th>Bill</th>
+                        <th>Charge</th>
+                        <th>Salary (Editable)</th>
+                        <th>Fine</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paperWorkTableRows.map((row) => (
+                        <tr key={row.riderId}>
+                          <td><strong>{row.name}</strong></td>
+                          <td>{row.delivered}</td>
+                          <td>{money(row.online)}</td>
+                          <td>{money(row.bill)}</td>
+                          <td>{money(row.charge)}</td>
+                          <td>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={row.salary}
+                              onChange={(e) => handleUpdateSalary(row.riderId, e.target.value)}
+                              style={{ width: "100px", padding: "5px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
+                            />
+                          </td>
+                          <td>{money(row.fine)}</td>
+                        </tr>
+                      ))}
+                      {paperWorkTableRows.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="empty-cell">Please select at least one rider to view paper work metrics.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                    {paperWorkTableRows.length > 0 && (
+                      <tfoot>
+                        <tr>
+                          <th>All Total</th>
+                          <th>{paperWorkTotals.delivered}</th>
+                          <th>{money(paperWorkTotals.online)}</th>
+                          <th>{money(paperWorkTotals.bill)}</th>
+                          <th>{money(paperWorkTotals.charge)}</th>
+                          <th>{money(paperWorkTotals.salary)}</th>
+                          <th>{money(paperWorkTotals.fine)}</th>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              </div>
+
+              {/* Profit Calculation Section */}
+              <div className="panel" style={{ textAlign: "center", padding: "30px", background: "linear-gradient(135deg, #f0fdf4 0%, #e6f6ef 100%)", border: "1px solid #bbf7d0" }}>
+                <div style={{ fontSize: "14px", fontWeight: "700", color: "#15803d", letterSpacing: "1.5px" }}>PROFIT SUMMARY</div>
+                <div style={{ fontSize: "13px", color: "#64748b", margin: "5px 0 15px" }}>Date: {paperWorkDate}</div>
+                <div style={{ fontSize: "36px", fontWeight: "800", color: "#166534", margin: "10px 0" }}>
+                  {money(calculatedProfit)}
+                </div>
+                <div style={{ fontSize: "12px", color: "#475569" }}>
+                  Formula: (Total Bill × 9.4%) + Total Charge = ({money(paperWorkTotals.bill)} × 9.4%) + {money(paperWorkTotals.charge)}
+                </div>
+              </div>
             </div>
           </section>
         )}
@@ -862,7 +1266,7 @@ function App() {
           </section>
         )}
 
-        <footer className="footer">CityFood Accounts · Firebase Firestore · Built for internal operations</footer>
+        <footer className="footer print-hide">CityFood Accounts · Firebase Firestore · Built for internal operations</footer>
       </main>
       {notice && <div className={`toast ${notice.type}`}><span>{notice.type === "success" ? "✓" : "!"}</span>{notice.text}</div>}
       {saving && <div className="saving-overlay"><div className="loader" /><strong>Saving your entry…</strong></div>}
@@ -927,16 +1331,41 @@ const styles = `
 .selection-controls { display: flex; align-items: center; gap: 12px; margin-bottom: 15px; }
 .text-btn { background: none; border: 0; color: #18a873; font-weight: 700; font-size: 12px; cursor: pointer; padding: 0; }
 .text-btn:hover { text-decoration: underline; }
-.multi-select-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 350px; overflow-y: auto; padding: 4px; border: 1px solid #e9edf4; border-radius: 8px; background: #fff; }
+.multi-select-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 250px; overflow-y: auto; padding: 4px; border: 1px solid #e9edf4; border-radius: 8px; background: #fff; }
 .restaurant-checkbox-card { display: flex; flex-direction: column; gap: 3px; padding: 10px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer; background: #fdfdfd; transition: all 0.15s ease; }
 .restaurant-checkbox-card:hover { border-color: #cbd5e1; background: #f8fafc; }
 .restaurant-checkbox-card.selected { border-color: #17a873; background: #f0fdf4; box-shadow: 0 0 0 1px #17a873; }
 .restaurant-checkbox-card span { font-weight: 700; font-size: 13px; color: #1e293b; }
 
+/* Print Styles: Hide UI controls when printing/downloading */
+@media print {
+  .print-hide, .sidebar, .topbar, .footer {
+    display: none !important;
+  }
+  .app-shell, .main-area {
+    margin: 0 !important;
+    width: 100% !important;
+    background: #fff !important;
+  }
+  .content {
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+  .panel {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin-bottom: 20px !important;
+  }
+  .print-only-header {
+    display: block !important;
+  }
+}
+
 @media(max-width:520px){.login-page{padding:22px 14px 58px}.login-card{padding:37px 24px 29px;border-radius:20px}.login-card h1{font-size:24px}.login-brand-name{font-size:23px}.login-description{font-size:12px}}
 @media(max-width:1000px){.sidebar{width:210px}.main-area{margin-left:210px;width:calc(100% - 210px)}.content{padding:24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.sidebar{width:270px;max-width:82vw;padding:22px 17px;transform:translateX(-105%);transition:transform .32s cubic-bezier(.2,.8,.2,1);box-shadow:18px 0 50px #101b2e24}.sidebar.sidebar-open{transform:translateX(0)}.brand{padding:0 8px 30px}.brand>div:last-child,.side-label,.nav-link span:last-child,.sidebar-bottom{display:block}.nav-link{justify-content:flex-start;padding:14px 12px;min-height:46px}.main-area{margin-left:0;width:100%}.topbar{height:72px;padding:0 14px 0 58px;position:sticky}.mobile-menu-btn{display:grid;place-items:center;position:absolute;left:13px;top:18px;width:34px;height:34px;border:1px solid #e7edf2;border-radius:9px;background:#fff;color:#26364b;font-size:18px;cursor:pointer}.sidebar-scrim{display:block;position:fixed;inset:0;background:#0d1728a6;border:0;z-index:4;backdrop-filter:blur(2px)}.topbar h1{font-size:18px}.content{padding:20px 14px 30px}.section-heading{align-items:start;gap:10px;flex-direction:column}.section-heading h2{font-size:19px}.stats-grid,.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.stat-card{padding:15px;min-height:130px;border-radius:15px}.stat-icon{width:38px;height:38px}.stat-value{font-size:clamp(18px,5vw,23px)}.stat-label{font-size:11px}.stat-hint{font-size:10px;line-height:1.45}.panel{padding:15px;border-radius:14px}.filter-bar{padding:13px;gap:12px}.filter-bar label{flex:1 1 100%;min-width:0;font-size:11px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:44px;font-size:14px}.entry-form{display:grid;grid-template-columns:1fr;gap:13px}.entry-form label,.entry-form .note-field{min-width:0}.entry-form label{font-size:11px}.entry-form .primary-btn{width:100%;height:46px;font-size:13px}.primary-btn,.delete-btn{min-height:40px}.table-wrap{border-radius:9px}th{font-size:10px;padding:13px 12px}td{font-size:12px;padding:14px 12px}.date-label{font-size:11px}.alert{margin:12px 13px 0}.today-chip{font-size:10px;padding:8px}.avatar{width:34px;height:34px}.footer{padding-bottom:30px}}
-@media(min-width:681px){.mobile-menu-btn,.sidebar-scrim{display:none}}
+@media(min-width:681px){.mobile-menu-btn,.sidebar-scrim{distance:none}}
 @media(max-width:380px){.stats-grid,.stats-grid.two{grid-template-columns:1fr}.stat-card{min-height:unset}.topbar-right{gap:8px}.today-chip{display:none}}
 `;
 
