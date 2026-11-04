@@ -1,10 +1,8 @@
-```javascript
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-// Firebase Web App Configuration
-// Values are loaded from Vercel Environment Variables or local .env
+// Firebase configuration from environment variables
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -14,7 +12,7 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-// Validate Firebase configuration
+// Validate configuration
 const missing = Object.entries(firebaseConfig)
   .filter(([, value]) => !value || !String(value).trim())
   .map(([key]) => key);
@@ -25,17 +23,13 @@ if (missing.length > 0) {
   );
 }
 
-// Initialize Firebase only once
+// Initialize Firebase
 const app = getApps().length > 0
   ? getApp()
   : initializeApp(firebaseConfig);
 
-// Initialize Firebase Authentication
+// Firebase services
 export const auth = getAuth(app);
-
-// Initialize Cloud Firestore
 export const db = getFirestore(app);
 
-// Export Firebase app
 export default app;
-```
