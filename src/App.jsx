@@ -28,6 +28,7 @@ const COLLECTIONS = {
   management: "management_entries",
   online: "online_entries",
   locations: "locations",
+  paperworkReports: "paperwork_reports",
 };
 
 const money = (value) =>
@@ -95,6 +96,32 @@ const itemSubtotal = (items = [], restaurantName = "", restaurantId = "") => {
   }, 0);
 };
 
+const getOrderRestaurants = (items = []) => {
+  if (!Array.isArray(items) || items.length === 0) return "—";
+  const names = items
+    .map((item) => item.miniResName || item.restaurantName || item.name)
+    .filter(Boolean);
+  const uniqueNames = Array.from(new Set(names));
+  return uniqueNames.length > 0 ? uniqueNames.join(", ") : "—";
+};
+
+// Foodish Logo Component[cite: 5]
+const FoodishLogo = ({ size = 28 }) => (
+  <svg width={size} height={size} viewBox="0 0 500 500" style={{ display: "inline-block", verticalAlign: "middle" }}>
+    <circle cx="250" cy="250" r="230" fill="#dc2626" />
+    <circle cx="250" cy="250" r="190" fill="none" stroke="#ffffff" strokeWidth="24" />
+    {/* Fork Left */}
+    <path d="M162 160 v180 h20 v-180 z" fill="#ffffff" />
+    <path d="M202 160 v180 h20 v-180 z" fill="#ffffff" />
+    <path d="M242 160 v180 h20 v-180 z" fill="#ffffff" />
+    <path d="M162 230 h100 v20 h-100 z" fill="#ffffff" />
+    <path d="M162 340 h100 v30 c0 30 -100 30 -100 0 z" fill="#ffffff" />
+    {/* Spoon Right */}
+    <ellipse cx="360" cy="230" rx="45" ry="60" fill="#ffffff" />
+    <path d="M345 280 h30 v110 h-30 z" fill="#ffffff" />
+  </svg>
+);
+
 function App() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -110,15 +137,57 @@ function App() {
   const [managementEntries, setManagementEntries] = useState([]);
   const [onlineEntries, setOnlineEntries] = useState([]);
   const [locationsData, setLocationsData] = useState([]);
+  const [firestorePaperReports, setFirestorePaperReports] = useState([]);
 
   const [page, setPage] = useState("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [restaurantId, setRestaurantId] = useState("");
   const [riderId, setRiderId] = useState("");
 
+  const [overviewDate, setOverviewDate] = useState(todayKey());
+  const [overviewSearch, setOverviewSearch] = useState("");
+  const [overviewStatus, setOverviewStatus] = useState("all");
+
+  const [resPageDate, setResPageDate] = useState(todayKey());
+  const [resPageStatus, setResPageStatus] = useState("all");
+  const [resPageSearch, setResPageSearch] = useState("");
+  const [noteModalEntry, setNoteModalEntry] = useState(null);
+  const [noteInputVal, setNoteInputVal] = useState("");
+
+  const [riderPageDate, setRiderPageDate] = useState(todayKey());
+  const [riderPageStatus, setRiderPageStatus] = useState("all");
+  const [riderPageSearch, setRiderPageSearch] = useState("");
+
+  const [editModalData, setEditModalData] = useState(null);
+  const [editAmountVal, setEditAmountVal] = useState("");
+  const [deleteModalData, setDeleteModalData] = useState(null);
+
+  const [savedEntityReports, setSavedEntityReports] = useState(() => {
+    try {
+      const saved = localStorage.getItem("foodish_saved_entity_reports");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [activeReportPrintData, setActiveReportPrintData] = useState(null);
+  const [activePaperworkPrintReport, setActivePaperworkPrintReport] = useState(null);
+
+  useEffect(() => {
+    document.title = "Foodish Accounts Dashboard";
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("foodish_saved_entity_reports", JSON.stringify(savedEntityReports));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [savedEntityReports]);
+
   const [selectedRestaurantIds, setSelectedRestaurantIds] = useState(() => {
     try {
-      const saved = localStorage.getItem("cityfood_selected_restaurants");
+      const saved = localStorage.getItem("foodish_selected_restaurants");
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -127,7 +196,7 @@ function App() {
 
   const [paperWorkRiderIds, setPaperWorkRiderIds] = useState(() => {
     try {
-      const saved = localStorage.getItem("cityfood_paperwork_riders");
+      const saved = localStorage.getItem("foodish_paperwork_riders");
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -136,40 +205,18 @@ function App() {
 
   const [paperWorkDate, setPaperWorkDate] = useState(todayKey());
 
-  const [savedPaperWorkReports, setSavedPaperWorkReports] = useState(() => {
-    try {
-      const saved = localStorage.getItem("cityfood_saved_paperwork_reports");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("cityfood_saved_paperwork_reports", JSON.stringify(savedPaperWorkReports));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [savedPaperWorkReports]);
-
   const [selectedDate, setSelectedDate] = useState(todayKey());
   const [historyStart, setHistoryStart] = useState(todayKey());
   const [historyEnd, setHistoryEnd] = useState(todayKey());
   const [historyType, setHistoryType] = useState("restaurant");
   const [onlineMethod, setOnlineMethod] = useState("bKash");
 
-  const [entryAmount, setEntryAmount] = useState("");
-  const [entryNote, setEntryNote] = useState("");
-  const [riderCollectionAmount, setRiderCollectionAmount] = useState("");
-  const [riderFineAmount, setRiderFineAmount] = useState("");
-  const [riderSalaryAmount, setRiderSalaryAmount] = useState("");
   const [onlineAmount, setOnlineAmount] = useState("");
   const [onlineNote, setOnlineNote] = useState("");
 
   useEffect(() => {
     try {
-      localStorage.setItem("cityfood_selected_restaurants", JSON.stringify(selectedRestaurantIds));
+      localStorage.setItem("foodish_selected_restaurants", JSON.stringify(selectedRestaurantIds));
     } catch (e) {
       console.error(e);
     }
@@ -177,7 +224,7 @@ function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem("cityfood_paperwork_riders", JSON.stringify(paperWorkRiderIds));
+      localStorage.setItem("foodish_paperwork_riders", JSON.stringify(paperWorkRiderIds));
     } catch (e) {
       console.error(e);
     }
@@ -228,6 +275,14 @@ function App() {
     }
   }
 
+  const handleManualRefresh = () => {
+    setLoading(true);
+    setTimeout(() => {
+      setLoading(false);
+      setNotice({ type: "success", text: "Data successfully refreshed!" });
+    }, 600);
+  };
+
   useEffect(() => {
     if (!user) return undefined;
     setLoading(true);
@@ -258,6 +313,7 @@ function App() {
     subscribe(COLLECTIONS.management, setManagementEntries, true);
     subscribe(COLLECTIONS.online, setOnlineEntries, true);
     subscribe(COLLECTIONS.locations, setLocationsData, true);
+    subscribe(COLLECTIONS.paperworkReports, setFirestorePaperReports, true);
 
     return () => unsubs.forEach((unsubscribe) => unsubscribe());
   }, [user]);
@@ -359,27 +415,25 @@ function App() {
   const selectAllPaperWorkRiders = () => setPaperWorkRiderIds(riders.map((r) => r.id));
   const clearPaperWorkRiders = () => setPaperWorkRiderIds([]);
 
-  async function handleUpdateSalary(riderIdToUpdate, newSalaryValue) {
+  async function handleUpdateManagementEntry({ entityType, entityId, entityName, type, amount, note, date }) {
     setSaving(true);
     try {
       const existingEntry = managementEntries.find(
         (entry) =>
-          entry.entityType === "rider" &&
-          String(entry.entityId) === String(riderIdToUpdate) &&
-          dateKey(entry.date || entry.createdAt) === paperWorkDate &&
-          normalized(entry.type) === "salary"
+          entry.entityType === entityType &&
+          String(entry.entityId) === String(entityId) &&
+          dateKey(entry.date || entry.createdAt) === date &&
+          normalized(entry.type) === normalized(type)
       );
 
-      const riderObj = riders.find((r) => r.id === riderIdToUpdate);
-      const riderName = riderObj ? riderObj.name : "Rider";
-
       const payload = {
-        entityType: "rider",
-        entityId: riderIdToUpdate,
-        entityName: riderName,
-        type: "salary",
-        amount: Number(newSalaryValue || 0),
-        date: paperWorkDate,
+        entityType,
+        entityId,
+        entityName,
+        type,
+        amount: Number(amount || 0),
+        note: note !== undefined ? note : (existingEntry?.note || ""),
+        date,
         updatedAt: serverTimestamp(),
       };
 
@@ -391,9 +445,9 @@ function App() {
           createdAt: serverTimestamp(),
         });
       }
-      setNotice({ type: "success", text: "Salary updated successfully." });
+      setNotice({ type: "success", text: "Successfully updated." });
     } catch (error) {
-      setNotice({ type: "error", text: `Salary update failed: ${error.message}` });
+      setNotice({ type: "error", text: `Update failed: ${error.message}` });
     } finally {
       setSaving(false);
     }
@@ -486,30 +540,48 @@ function App() {
   }, [paperWorkTableRows]);
 
   const calculatedProfit = useMemo(() => {
-    return (paperWorkTotals.bill * 0.094) + paperWorkTotals.charge;
+    return (paperWorkTotals.bill * 0.0941) + paperWorkTotals.charge;
   }, [paperWorkTotals]);
 
-  const saveCurrentPaperWorkReport = () => {
-    const reportData = {
-      id: `report-${paperWorkDate}-${Date.now()}`,
-      date: paperWorkDate,
-      savedAt: new Date().toISOString(),
-      rows: JSON.parse(JSON.stringify(paperWorkTableRows)),
-      totals: { ...paperWorkTotals },
-      profit: calculatedProfit,
-    };
+  async function saveCurrentPaperWorkReport() {
+    setSaving(true);
+    try {
+      const reportData = {
+        date: paperWorkDate,
+        savedAt: new Date().toISOString(),
+        rows: JSON.parse(JSON.stringify(paperWorkTableRows)),
+        totals: { ...paperWorkTotals },
+        profit: calculatedProfit,
+      };
 
-    setSavedPaperWorkReports((prev) => {
-      const filtered = prev.filter((item) => item.date !== paperWorkDate);
-      return [reportData, ...filtered];
+      const existing = firestorePaperReports.find(r => r.date === paperWorkDate);
+      if (existing) {
+        await updateDoc(doc(db, COLLECTIONS.paperworkReports, existing.id), reportData);
+      } else {
+        await addDoc(collection(db, COLLECTIONS.paperworkReports), reportData);
+      }
+
+      setNotice({ type: "success", text: `Paper Work report for ${paperWorkDate} permanently saved!` });
+    } catch (error) {
+      setNotice({ type: "error", text: `Save failed: ${error.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const deleteSavedReport = (reportId) => {
+    setDeleteModalData({
+      title: "Delete Saved Report",
+      message: "Are you sure you want to delete this saved report?",
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, COLLECTIONS.paperworkReports, reportId));
+          setNotice({ type: "success", text: "Saved report deleted successfully." });
+        } catch (error) {
+          setNotice({ type: "error", text: `Delete failed: ${error.message}` });
+        }
+      }
     });
-    setNotice({ type: "success", text: `Paper Work report for ${paperWorkDate} permanently saved!` });
-  };
-
-  const deleteSavedReport = (reportDate) => {
-    if (!window.confirm(`Are you sure you want to delete the saved report for ${reportDate}?`)) return;
-    setSavedPaperWorkReports((prev) => prev.filter((item) => item.date !== reportDate));
-    setNotice({ type: "success", text: "Saved report deleted successfully." });
   };
 
   const downloadSavedReportCSV = (report) => {
@@ -522,7 +594,7 @@ function App() {
     });
 
     csvContent += `\nAll Total,,${report.totals.online},${report.totals.bill},${report.totals.charge},${report.totals.salary},${report.totals.fine}\n`;
-    csvContent += `\nProfit Summary (Formula: Bill*9.4% + Charge),,${report.profit}\n`;
+    csvContent += `\nProfit Summary (Formula: Bill*9.41% + Charge),,${report.profit}\n`;
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -534,68 +606,163 @@ function App() {
   };
 
   const downloadSavedReportPDF = (report) => {
-    setPaperWorkDate(report.date);
+    setActivePaperworkPrintReport(report);
     setTimeout(() => {
       window.print();
     }, 200);
   };
 
-  const todaysOrders = useMemo(
-    () => orders.filter((order) => dateKey(order.createdAt) === todayKey()),
-    [orders]
+  // Overview Date-wise Orders & Stats Calculation
+  const overviewOrdersOnDate = useMemo(
+    () => orders.filter((order) => dateKey(order.createdAt) === overviewDate),
+    [orders, overviewDate]
   );
-  const deliveredToday = todaysOrders.filter(isDelivered);
-  const cancelledToday = todaysOrders.filter(isCancelled);
-  const deliveredTotal = deliveredToday.reduce((sum, order) => sum + orderAmount(order), 0);
-  const cancelledTotal = cancelledToday.reduce((sum, order) => sum + orderAmount(order), 0);
-  const codTotal = deliveredToday
+
+  const overviewFilteredOrders = useMemo(() => {
+    return overviewOrdersOnDate.filter((order) => {
+      const status = normalized(order.orderStatus);
+      if (overviewStatus === "delivered" && !isDelivered(order)) return false;
+      if (overviewStatus === "cancelled" && !isCancelled(order)) return false;
+      if (overviewStatus === "pending" && !["pending", "processing", "accepted"].includes(status)) return false;
+      if (overviewStatus === "on_the_way" && !["on the way", "ontheway", "picked up", "dispatched"].includes(status)) return false;
+
+      if (!overviewSearch) return true;
+      const s = normalized(overviewSearch);
+      const orderIdStr = normalized(order.orderId || order.id);
+      const userName = normalized(order.userName);
+      const userPhone = normalized(order.userPhone);
+      const restaurantNames = normalized(getOrderRestaurants(order.items));
+
+      return (
+        orderIdStr.includes(s) ||
+        userName.includes(s) ||
+        userPhone.includes(s) ||
+        restaurantNames.includes(s)
+      );
+    }).sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
+  }, [overviewOrdersOnDate, overviewSearch, overviewStatus]);
+
+  const deliveredOverview = overviewOrdersOnDate.filter(isDelivered);
+  const cancelledOverview = overviewOrdersOnDate.filter(isCancelled);
+  const deliveredTotalOverview = deliveredOverview.reduce((sum, order) => sum + orderAmount(order), 0);
+  const cancelledTotalOverview = cancelledOverview.reduce((sum, order) => sum + orderAmount(order), 0);
+  const codTotalOverview = deliveredOverview
     .filter(isCOD)
     .reduce((sum, order) => sum + orderAmount(order), 0);
 
-  const restaurantOrders = useMemo(() => {
+  // Restaurant Page Orders with Search
+  const restaurantPageOrders = useMemo(() => {
     if (!selectedRestaurant) return [];
-    return orders
-      .filter((order) => {
-        const matchesDate = dateKey(order.createdAt) === selectedDate;
-        const matchesDel = isDelivered(order);
-        const subtotal = itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id);
-        return matchesDate && matchesDel && subtotal > 0;
-      })
-      .map((order) => ({
-        ...order,
-        restaurantSubtotal: itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id),
-      }));
-  }, [orders, selectedDate, selectedRestaurant]);
+    return orders.filter((order) => {
+      const matchesDate = dateKey(order.createdAt) === resPageDate;
+      const subtotal = itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id);
+      if (!matchesDate || subtotal <= 0) return false;
 
-  const restaurantSales = restaurantOrders
-    .reduce((sum, order) => sum + order.restaurantSubtotal, 0);
+      const status = normalized(order.orderStatus);
+      if (resPageStatus === "delivered" && !isDelivered(order)) return false;
+      if (resPageStatus === "cancelled" && !isCancelled(order)) return false;
+      if (resPageStatus === "pending" && !["pending", "processing", "accepted"].includes(status)) return false;
+      if (resPageStatus === "on_the_way" && !["on the way", "ontheway", "picked up", "dispatched"].includes(status)) return false;
 
-  const riderOrders = useMemo(() => {
+      if (!resPageSearch) return true;
+      const s = normalized(resPageSearch);
+      const orderIdStr = normalized(order.orderId || order.id);
+      const userName = normalized(order.userName);
+      const userPhone = normalized(order.userPhone);
+
+      return orderIdStr.includes(s) || userName.includes(s) || userPhone.includes(s);
+    }).map((order) => ({
+      ...order,
+      restaurantSubtotal: itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id),
+    })).sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
+  }, [orders, selectedRestaurant, resPageDate, resPageStatus, resPageSearch]);
+
+  const restaurantPageStats = useMemo(() => {
+    if (!selectedRestaurant) return { deliveredTotal: 0, pendingTotal: 0, cancelledTotal: 0 };
+    const allResOrdersOnDate = orders.filter((order) => {
+      return dateKey(order.createdAt) === resPageDate && itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id) > 0;
+    });
+
+    let deliveredSum = 0;
+    let pendingSum = 0;
+    let cancelledSum = 0;
+
+    allResOrdersOnDate.forEach((order) => {
+      const sub = itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id);
+      if (isDelivered(order)) {
+        deliveredSum += sub;
+      } else if (isCancelled(order)) {
+        cancelledSum += sub;
+      } else {
+        pendingSum += sub;
+      }
+    });
+
+    return { deliveredTotal: deliveredSum, pendingTotal: pendingSum, cancelledTotal: cancelledSum };
+  }, [orders, selectedRestaurant, resPageDate]);
+
+  // Rider Page Orders with Search
+  const riderPageOrders = useMemo(() => {
     if (!selectedRider) return [];
-    return orders.filter(
-      (order) =>
-        dateKey(order.createdAt) === selectedDate &&
-        String(order.riderId || "") === String(selectedRider.id) &&
-        isDelivered(order)
-    );
-  }, [orders, selectedDate, selectedRider]);
+    return orders.filter((order) => {
+      const matchesDate = dateKey(order.createdAt) === riderPageDate;
+      const matchesRider = String(order.riderId || "") === String(selectedRider.id);
+      if (!matchesDate || !matchesRider) return false;
 
-  const riderCOD = riderOrders
-    .filter(isCOD)
-    .reduce((sum, order) => sum + orderAmount(order), 0);
+      const status = normalized(order.orderStatus);
+      if (riderPageStatus === "delivered" && !isDelivered(order)) return false;
+      if (riderPageStatus === "cancelled" && !isCancelled(order)) return false;
+      if (riderPageStatus === "pending" && !["pending", "processing", "accepted"].includes(status)) return false;
+      if (riderPageStatus === "on_the_way" && !["on the way", "ontheway", "picked up", "dispatched"].includes(status)) return false;
 
-  const selectedDateManagement = managementEntries.filter(
-    (entry) => dateKey(entry.date || entry.createdAt) === selectedDate
+      if (!riderPageSearch) return true;
+      const s = normalized(riderPageSearch);
+      const orderIdStr = normalized(order.orderId || order.id);
+      const userName = normalized(order.userName);
+      const userPhone = normalized(order.userPhone);
+      const restNames = normalized(getOrderRestaurants(order.items));
+
+      return orderIdStr.includes(s) || userName.includes(s) || userPhone.includes(s) || restNames.includes(s);
+    }).sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
+  }, [orders, selectedRider, riderPageDate, riderPageStatus, riderPageSearch]);
+
+  const riderPageStats = useMemo(() => {
+    if (!selectedRider) return { deliveredTotal: 0, pendingTotal: 0, cancelledTotal: 0 };
+    const allRiderOrdersOnDate = orders.filter((order) => {
+      return dateKey(order.createdAt) === riderPageDate && String(order.riderId || "") === String(selectedRider.id);
+    });
+
+    let deliveredSum = 0;
+    let pendingSum = 0;
+    let cancelledSum = 0;
+
+    allRiderOrdersOnDate.forEach((order) => {
+      const amt = orderAmount(order);
+      if (isDelivered(order)) {
+        deliveredSum += amt;
+      } else if (isCancelled(order)) {
+        cancelledSum += amt;
+      } else {
+        pendingSum += amt;
+      }
+    });
+
+    return { deliveredTotal: deliveredSum, pendingTotal: pendingSum, cancelledTotal: cancelledSum };
+  }, [orders, selectedRider, riderPageDate]);
+
+  const restaurantPhysicalEntry = managementEntries.find(
+    (e) => e.entityType === "restaurant" && String(e.entityId) === String(restaurantId) && dateKey(e.date || e.createdAt) === resPageDate && ["collection", "physical"].includes(normalized(e.type))
   );
-  const restaurantPhysicalTotal = selectedDateManagement
-    .filter((entry) => entry.entityType === "restaurant" && String(entry.entityId) === String(restaurantId) && ["collection", "physical"].includes(normalized(entry.type)))
-    .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-  const riderDateEntries = selectedDateManagement.filter(
-    (entry) => entry.entityType === "rider" && String(entry.entityId) === String(riderId)
+
+  const riderCollectionEntry = managementEntries.find(
+    (e) => e.entityType === "rider" && String(e.entityId) === String(riderId) && dateKey(e.date || e.createdAt) === riderPageDate && ["collection", "physical"].includes(normalized(e.type))
   );
-  const riderCollectionTotal = riderDateEntries.filter((entry) => ["collection", "physical"].includes(normalized(entry.type))).reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-  const riderFineTotal = riderDateEntries.filter((entry) => normalized(entry.type) === "fine").reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-  const riderSalaryTotal = riderDateEntries.filter((entry) => normalized(entry.type) === "salary").reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+  const riderFineEntry = managementEntries.find(
+    (e) => e.entityType === "rider" && String(e.entityId) === String(riderId) && dateKey(e.date || e.createdAt) === riderPageDate && normalized(e.type) === "fine"
+  );
+  const riderSalaryEntry = managementEntries.find(
+    (e) => e.entityType === "rider" && String(e.entityId) === String(riderId) && dateKey(e.date || e.createdAt) === riderPageDate && normalized(e.type) === "salary"
+  );
 
   const bKashTotal = onlineEntries
     .filter((entry) => normalized(entry.method) === "bkash")
@@ -610,6 +777,137 @@ function App() {
         dateKey(entry.date || entry.createdAt) === selectedDate
     )
     .sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
+
+  // History & Reports - Restaurant Table data generation for date range
+  const historyRestaurantRows = useMemo(() => {
+    if (!historyStart || !historyEnd || !restaurantId) return [];
+    const rowsMap = new Map();
+
+    let curr = new Date(historyStart);
+    const end = new Date(historyEnd);
+    while (curr <= end) {
+      const k = dateKey(curr);
+      rowsMap.set(k, { date: k, itemSales: 0, physicalAmount: 0 });
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    orders.forEach((order) => {
+      const k = dateKey(order.createdAt);
+      if (rowsMap.has(k) && isDelivered(order)) {
+        const sub = itemSubtotal(order.items, selectedRestaurant?.name || "", selectedRestaurant?.id || "");
+        if (sub > 0) {
+          rowsMap.get(k).itemSales += sub;
+        }
+      }
+    });
+
+    managementEntries.forEach((entry) => {
+      const k = dateKey(entry.date || entry.createdAt);
+      if (
+        rowsMap.has(k) &&
+        entry.entityType === "restaurant" &&
+        String(entry.entityId) === String(restaurantId) &&
+        ["collection", "physical"].includes(normalized(entry.type))
+      ) {
+        rowsMap.get(k).physicalAmount += Number(entry.amount || 0);
+      }
+    });
+
+    return Array.from(rowsMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [orders, managementEntries, historyStart, historyEnd, restaurantId, selectedRestaurant]);
+
+  const historyRestaurantTotals = useMemo(() => {
+    return historyRestaurantRows.reduce(
+      (acc, row) => ({
+        itemSales: acc.itemSales + row.itemSales,
+        physicalAmount: acc.physicalAmount + row.physicalAmount,
+      }),
+      { itemSales: 0, physicalAmount: 0 }
+    );
+  }, [historyRestaurantRows]);
+
+  // History & Reports - Rider Table data generation for date range
+  const historyRiderRows = useMemo(() => {
+    if (!historyStart || !historyEnd || !riderId) return [];
+    const rowsMap = new Map();
+
+    let curr = new Date(historyStart);
+    const end = new Date(historyEnd);
+    while (curr <= end) {
+      const k = dateKey(curr);
+      rowsMap.set(k, { date: k, deliveredCount: 0, deliveredCod: 0, collection: 0, fine: 0, salary: 0 });
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    orders.forEach((order) => {
+      const k = dateKey(order.createdAt);
+      if (rowsMap.has(k) && String(order.riderId || "") === String(riderId) && isDelivered(order)) {
+        rowsMap.get(k).deliveredCount += 1;
+        if (isCOD(order)) {
+          rowsMap.get(k).deliveredCod += orderAmount(order);
+        }
+      }
+    });
+
+    managementEntries.forEach((entry) => {
+      const k = dateKey(entry.date || entry.createdAt);
+      if (
+        rowsMap.has(k) &&
+        entry.entityType === "rider" &&
+        String(entry.entityId) === String(riderId)
+      ) {
+        const type = normalized(entry.type);
+        const amt = Number(entry.amount || 0);
+        if (type === "collection" || type === "physical") rowsMap.get(k).collection += amt;
+        if (type === "fine") rowsMap.get(k).fine += amt;
+        if (type === "salary") rowsMap.get(k).salary += amt;
+      }
+    });
+
+    return Array.from(rowsMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [orders, managementEntries, historyStart, historyEnd, riderId]);
+
+  const historyRiderTotals = useMemo(() => {
+    return historyRiderRows.reduce(
+      (acc, row) => ({
+        deliveredCount: acc.deliveredCount + row.deliveredCount,
+        deliveredCod: acc.deliveredCod + row.deliveredCod,
+        collection: acc.collection + row.collection,
+        fine: acc.fine + row.fine,
+        salary: acc.salary + row.salary,
+      }),
+      { deliveredCount: 0, deliveredCod: 0, collection: 0, fine: 0, salary: 0 }
+    );
+  }, [historyRiderRows]);
+
+  const saveEntityReportArchive = (type) => {
+    const isRes = type === "restaurant";
+    const reportObj = {
+      id: `${type}-rep-${isRes ? restaurantId : riderId}-${historyStart}-${historyEnd}-${Date.now()}`,
+      entityId: isRes ? restaurantId : riderId,
+      entityName: isRes ? (selectedRestaurant?.name || "Restaurant") : (selectedRider?.name || "Rider"),
+      startDate: historyStart,
+      endDate: historyEnd,
+      savedAt: new Date().toISOString(),
+      rows: isRes ? historyRestaurantRows : historyRiderRows,
+      totals: isRes ? historyRestaurantTotals : historyRiderTotals,
+      type
+    };
+
+    setSavedEntityReports((prev) => [reportObj, ...prev.filter(r => !(r.type === type && r.entityId === (isRes ? restaurantId : riderId) && r.startDate === historyStart && r.endDate === historyEnd))]);
+    setNotice({ type: "success", text: `${isRes ? "Restaurant" : "Rider"} report permanently saved!` });
+  };
+
+  const deleteSavedEntityReport = (id) => {
+    setDeleteModalData({
+      title: "Delete Saved Report",
+      message: "Are you sure you want to delete this saved report? This action cannot be undone.",
+      onConfirm: () => {
+        setSavedEntityReports((prev) => prev.filter(r => r.id !== id));
+        setNotice({ type: "success", text: "Report deleted successfully." });
+      }
+    });
+  };
 
   const historyRows = useMemo(() => {
     const rows = new Map();
@@ -697,78 +995,6 @@ function App() {
     { sales: 0, collection: 0, cod: 0, fine: 0, salary: 0, bkash: 0, nagad: 0 }
   );
 
-  async function upsertManagementEntry({ entityType, entity, type, amount, note }) {
-    const matching = managementEntries.filter((entry) =>
-      entry.entityType === entityType &&
-      String(entry.entityId) === String(entity.id) &&
-      dateKey(entry.date || entry.createdAt) === selectedDate &&
-      (normalized(entry.type) === normalized(type) || (entityType === "restaurant" && type === "physical" && normalized(entry.type) === "collection"))
-    );
-    const payload = {
-      entityType,
-      entityId: entity.id,
-      entityName: entity.name || "Unknown",
-      type,
-      amount: Number(amount),
-      note: (note || "").trim(),
-      date: selectedDate,
-      updatedAt: serverTimestamp(),
-    };
-    if (matching.length) {
-      await updateDoc(doc(db, COLLECTIONS.management, matching[0].id), payload);
-      await Promise.all(matching.slice(1).map((entry) => deleteDoc(doc(db, COLLECTIONS.management, entry.id))));
-    } else {
-      await addDoc(collection(db, COLLECTIONS.management), {
-        ...payload,
-        createdAt: serverTimestamp(),
-      });
-    }
-  }
-
-  async function saveManagementEntry(event) {
-    event.preventDefault();
-    if (!selectedRestaurant && page === "restaurants") return;
-    if (!selectedRider && page === "riders") return;
-
-    const entityType = page === "riders" ? "rider" : "restaurant";
-    const entity = entityType === "rider" ? selectedRider : selectedRestaurant;
-    const entriesToSave = page === "restaurants"
-      ? [{ type: "physical", amount: entryAmount }]
-      : [
-          { type: "collection", amount: riderCollectionAmount },
-          { type: "fine", amount: riderFineAmount },
-          { type: "salary", amount: riderSalaryAmount },
-        ].filter((entry) => entry.amount !== "");
-
-    if (!entriesToSave.length || entriesToSave.some((entry) => entry.amount === "" || !Number.isFinite(Number(entry.amount)) || Number(entry.amount) < 0)) {
-      setNotice({ type: "error", text: "Sothik amount din." });
-      return;
-    }
-
-    setSaving(true);
-    try {
-      for (const entry of entriesToSave) {
-        await upsertManagementEntry({
-          entityType,
-          entity,
-          type: entry.type,
-          amount: entry.amount,
-          note: entryNote,
-        });
-      }
-      setEntryAmount("");
-      setRiderCollectionAmount("");
-      setRiderFineAmount("");
-      setRiderSalaryAmount("");
-      setEntryNote("");
-      setNotice({ type: "success", text: "Hisab songrokkhon hoyeche." });
-    } catch (error) {
-      setNotice({ type: "error", text: `Save failed: ${error.message}` });
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function saveOnlineEntry(event) {
     event.preventDefault();
     if (!onlineAmount || Number(onlineAmount) < 0) {
@@ -794,16 +1020,6 @@ function App() {
     }
   }
 
-  async function removeEntry(collectionName, id) {
-    if (!window.confirm("Ei entry-ti delete korben?")) return;
-    try {
-      await deleteDoc(doc(db, collectionName, id));
-      setNotice({ type: "success", text: "Entry deleted successfully." });
-    } catch (error) {
-      setNotice({ type: "error", text: `Delete failed: ${error.message}` });
-    }
-  }
-
   const navItems = [
     ["overview", "Overview", "◫"],
     ["restaurants", "Restaurants", "▤"],
@@ -826,12 +1042,12 @@ function App() {
           <div className="login-glow login-glow-one" />
           <div className="login-glow login-glow-two" />
           <main className="login-card">
-            <div className="login-brand-mark">C</div>
-            <div className="login-brand-name">CityFood <span>Admin</span></div>
+            <div className="login-brand-mark"><FoodishLogo size={36} /></div>
+            <div className="login-brand-name">Foodish <span>Admin</span></div>
             <div className="login-kicker">ACCOUNTS & OPERATIONS CONSOLE</div>
             <div className="login-divider" />
             <h1>Welcome back</h1>
-            <p className="login-description">Apnar CityFood Admin account diye login korun.</p>
+            <p className="login-description">Apnar Foodish Admin account diye login korun.</p>
             {authError && (
               <div className="login-error" role="alert">
                 <strong>Login failed</strong>
@@ -847,7 +1063,7 @@ function App() {
               <span className="security-dot" /> Secure access for authorized administrators only
             </div>
           </main>
-          <footer className="login-footer">© {new Date().getFullYear()} CityFood · Internal use only</footer>
+          <footer className="login-footer">© {new Date().getFullYear()} Foodish · Internal use only</footer>
         </div>
       </>
     );
@@ -884,8 +1100,8 @@ function App() {
       {sidebarOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand">
-          <div className="brand-mark">C</div>
-          <div><strong>CityFood</strong><small>ACCOUNTS CONSOLE</small></div>
+          <div className="brand-mark"><FoodishLogo size={24} /></div>
+          <div><strong>Foodish</strong><small>ACCOUNTS CONSOLE</small></div>
         </div>
         <div className="side-label">WORKSPACE</div>
         <nav>
@@ -905,10 +1121,13 @@ function App() {
         <header className="topbar">
           <div>
             <button className="mobile-menu-btn" aria-label="Open navigation" onClick={() => setSidebarOpen(true)}>☰</button>
-            <div className="eyebrow">CITYFOOD / FINANCE</div>
+            <div className="eyebrow">FOODISH / FINANCE</div>
             <h1>{navItems.find(([id]) => id === page)?.[1]}</h1>
           </div>
           <div className="topbar-right">
+            <button className="primary-btn refresh-btn" onClick={handleManualRefresh} title="Refresh Data">
+              🔄 Refresh
+            </button>
             <div className="today-chip"><span>●</span> Live data</div>
             <div className="avatar">{(user?.displayName || user?.email || "A").slice(0, 1).toUpperCase()}</div>
           </div>
@@ -919,21 +1138,127 @@ function App() {
 
         {page === "overview" && (
           <section className="content">
-            <div className="section-heading"><div><h2>Daily performance</h2><p>Ajker order o financial sarangsho</p></div><span className="date-label">{new Date().toLocaleDateString("en-BD", { dateStyle: "full" })}</span></div>
-            <div className="stats-grid">
-              <StatCard label="Delivered total" value={money(deliveredTotal)} hint={`${deliveredToday.length} delivered orders`} icon="↗" tone="green" />
-              <StatCard label="Cancelled total" value={money(cancelledTotal)} hint={`${cancelledToday.length} cancelled orders`} icon="×" tone="red" />
-              <StatCard label="Delivered COD" value={money(codTotal)} hint="Cash on delivery" icon="৳" tone="blue" />
-              <StatCard label="Today's orders" value={todaysOrders.length.toLocaleString()} hint="All placed orders today" icon="▤" tone="purple" />
+            <div className="section-heading">
+              <div>
+                <h2>Daily performance & Orders</h2>
+                <p>Filter by date, search orders, and view comprehensive order details with rider and restaurant info.</p>
+              </div>
+              <span className="date-label">{new Date().toLocaleDateString("en-BD", { dateStyle: "full" })}</span>
             </div>
+
+            {/* Overview Filter Bar at the Top with Order Status Filter */}
+            <div className="panel" style={{ padding: "16px", marginBottom: "20px" }}>
+              <div className="filter-bar" style={{ margin: 0, border: 0, padding: 0 }}>
+                <label>
+                  Filter Date
+                  <input type="date" value={overviewDate} onChange={(e) => setOverviewDate(e.target.value)} />
+                </label>
+                <label>
+                  Order Status Filter
+                  <select value={overviewStatus} onChange={(e) => setOverviewStatus(e.target.value)}>
+                    <option value="all">All Orders</option>
+                    <option value="delivered">Delivered Only</option>
+                    <option value="pending">Pending / Processing</option>
+                    <option value="on_the_way">On The Way</option>
+                    <option value="cancelled">Cancelled Only</option>
+                  </select>
+                </label>
+                <label style={{ flex: 2 }}>
+                  Search Orders (Phone, Order ID, Customer Name, Restaurant)
+                  <input
+                    type="text"
+                    value={overviewSearch}
+                    onChange={(e) => setOverviewSearch(e.target.value)}
+                    placeholder="Type to search..."
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Overview Stats Cards (Date-wise) */}
+            <div className="stats-grid orders-card-grid">
+              <StatCard label="Delivered total" value={money(deliveredTotalOverview)} hint={`${deliveredOverview.length} delivered orders`} icon="↗" tone="green" />
+              <StatCard label="Cancelled total" value={money(cancelledTotalOverview)} hint={`${cancelledOverview.length} cancelled orders`} icon="×" tone="red" />
+              <StatCard label="Delivered COD" value={money(codTotalOverview)} hint="Cash on delivery" icon="৳" tone="blue" />
+              <StatCard label="Orders on date" value={overviewOrdersOnDate.length.toLocaleString()} hint={`Total orders · ${overviewDate}`} icon="▤" tone="purple" />
+            </div>
+
             <div className="panel">
-              <div className="panel-head"><div><h3>Recent orders</h3><p>Latest orders from Firestore</p></div><span className="count-pill">{todaysOrders.length} today</span></div>
-              <OrderTable orders={[...orders].sort((a,b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0)).slice(0, 8)} />
+              <div className="panel-head">
+                <div>
+                  <h3>Filtered Orders ({overviewFilteredOrders.length})</h3>
+                  <p>Showing orders for date: {overviewDate}</p>
+                </div>
+              </div>
+
+              <div className="table-wrap universal-card-list">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Order ID</th>
+                      <th>Customer Info</th>
+                      <th>Restaurant(s)</th>
+                      <th>Rider Info</th>
+                      <th>Time</th>
+                      <th>Payment</th>
+                      <th>Status</th>
+                      <th className="right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {overviewFilteredOrders.map((order, idx) => {
+                      const matchedRider = riders.find((r) => String(r.id) === String(order.riderId));
+                      const riderDisplayName = matchedRider ? (matchedRider.name || matchedRider.id) : (order.riderName || "—");
+                      const riderPhoneNum = matchedRider ? (matchedRider.phone || "") : (order.riderPhone || "");
+                      const restNames = getOrderRestaurants(order.items);
+
+                      const borderColors = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
+                      const cardBorderColor = borderColors[idx % borderColors.length];
+
+                      return (
+                        <tr key={order.id} style={{ "--card-border-color": cardBorderColor }}>
+                          <td data-label="Order ID"><strong>#{order.orderId || order.id.slice(0, 8)}</strong></td>
+                          <td data-label="Customer Info">
+                            <div className="card-value-block">
+                              <strong>{order.userName || "—"}</strong>
+                              <small className="cell-sub">{order.userPhone || ""}</small>
+                            </div>
+                          </td>
+                          <td data-label="Restaurant(s)">
+                            <div className="card-value-block">
+                              <span style={{ fontWeight: "700", color: "#0f172a" }}>{restNames}</span>
+                            </div>
+                          </td>
+                          <td data-label="Rider Info">
+                            <div className="card-value-block">
+                              <strong>{riderDisplayName}</strong>
+                              {riderPhoneNum && <small className="cell-sub">Phone: {riderPhoneNum}</small>}
+                            </div>
+                          </td>
+                          <td data-label="Time">{formatDateTime(order.createdAt)}</td>
+                          <td data-label="Payment">{order.payment || order.paymentMethod || "—"}</td>
+                          <td data-label="Status">
+                            <span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>
+                              {order.orderStatus || "Pending"}
+                            </span>
+                          </td>
+                          <td data-label="Total" className="right"><strong>{money(orderAmount(order))}</strong></td>
+                        </tr>
+                      );
+                    })}
+                    {overviewFilteredOrders.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="empty-cell">No orders found matching your search and filter.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </section>
         )}
 
-        {/* Paper Work Page with Permanent Save, Snapshot Archive, and Delete Option */}
+        {/* Paper Work Page with Professional Preview Layout matching History & Reports */}
         {page === "paperwork" && (
           <section className="content">
             <div className="section-heading print-hide">
@@ -941,9 +1266,9 @@ function App() {
                 <h2>Paper Work & Profit Calculation</h2>
                 <p>Select riders, filter by date, view calculated metrics, manage salaries, and save permanent date-wise reports.</p>
               </div>
-              <div style={{ display: "flex", gap: "10px" }}>
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
                 <button className="primary-btn" onClick={saveCurrentPaperWorkReport}>💾 Save Permanent Report for {paperWorkDate}</button>
-                <button className="primary-btn" onClick={() => window.print()}>Print / Download PDF View</button>
+                <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>Print / Download PDF View</button>
               </div>
             </div>
 
@@ -986,13 +1311,13 @@ function App() {
               </div>
             </div>
 
-            {/* Saved Reports Archive List with Delete Option */}
-            {savedPaperWorkReports.length > 0 && (
+            {/* Saved Reports Archive List with Permanent Snapshot & Delete Option */}
+            {firestorePaperReports.length > 0 && (
               <div className="panel print-hide">
                 <div className="panel-head">
                   <div>
-                    <h3>Saved Paper Work Reports Archive (Permanent)</h3>
-                    <p>Download CSV/PDF or delete previously saved permanent reports</p>
+                    <h3>Saved Paper Work Reports Archive (Permanent Database Snapshot)</h3>
+                    <p>Download CSV/PDF or view previously saved permanent reports</p>
                   </div>
                 </div>
                 <div className="table-wrap">
@@ -1006,19 +1331,19 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {savedPaperWorkReports.map((rep) => (
-                        <tr key={rep.date}>
+                      {firestorePaperReports.map((rep) => (
+                        <tr key={rep.id}>
                           <td><strong>{rep.date}</strong></td>
                           <td>{formatDateTime(rep.savedAt)}</td>
                           <td>{money(rep.profit)}</td>
                           <td className="right" style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                            <button className="primary-btn" style={{ height: "30px", padding: "0 12px", fontSize: "11px", background: "#059669" }} onClick={() => setActivePaperworkPrintReport(rep)}>
+                              👁️ View / Print PDF
+                            </button>
                             <button className="primary-btn" style={{ height: "30px", padding: "0 12px", fontSize: "11px" }} onClick={() => downloadSavedReportCSV(rep)}>
                               📥 CSV
                             </button>
-                            <button className="primary-btn" style={{ height: "30px", padding: "0 12px", fontSize: "11px", background: "#3b82f6" }} onClick={() => downloadSavedReportPDF(rep)}>
-                              🖨️ PDF
-                            </button>
-                            <button className="delete-btn" style={{ height: "30px", padding: "0 12px", fontSize: "11px" }} onClick={() => deleteSavedReport(rep.date)}>
+                            <button className="delete-btn" style={{ height: "30px", padding: "0 12px", fontSize: "11px" }} onClick={() => deleteSavedReport(rep.id)}>
                               🗑️ Delete
                             </button>
                           </td>
@@ -1030,20 +1355,44 @@ function App() {
               </div>
             )}
 
-            {/* Printable Area Wrapper for Table & Profit Summary */}
-            <div className="printable-report-area">
-              {/* Print Header: FOODISH STATEMENT & Date */}
-              <div className="print-only-header" style={{ display: "none", textAlign: "center", marginBottom: "30px" }}>
-                <h1 style={{ fontSize: "38px", fontWeight: "900", color: "#000000", margin: "0 0 10px", letterSpacing: "1.5px", textTransform: "uppercase" }}>FOODISH STATEMENT</h1>
-                <p style={{ fontSize: "20px", fontWeight: "800", color: "#1e293b", margin: 0 }}>Date: {paperWorkDate}</p>
+            {/* Professional PDF Preview Area matching History & Reports */}
+            <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
+
+              {/* PDF Watermark Logo Center */}
+              <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
+                <FoodishLogo size={360} />
               </div>
 
-              <div className="panel">
-                <div className="panel-head">
+              {/* PDF Header with FOODISH Branding & Logo */}
+              <div className="print-header" style={{ textAlign: "center", marginBottom: "30px", position: "relative", zIndex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
+                  <FoodishLogo size={36} />
+                  <span style={{ fontSize: "28px", fontWeight: "900", letterSpacing: "2px", color: "#10b981" }}>FOODISH</span>
+                </div>
+                <h1 style={{ fontSize: "32px", fontWeight: "900", color: "#0f172a", margin: "0 0 8px", textTransform: "uppercase" }}>
+                  FOODISH STATEMENT {activePaperworkPrintReport ? `(${activePaperworkPrintReport.date})` : ""}
+                </h1>
+                <p style={{ fontSize: "16px", fontWeight: "700", color: "#475569", margin: 0 }}>
+                  Date: {activePaperworkPrintReport ? activePaperworkPrintReport.date : paperWorkDate}
+                </p>
+              </div>
+
+              <div className="panel" style={{ border: 0, padding: 0, boxShadow: "none", position: "relative", zIndex: 1, background: "rgba(255,255,255,0.96)" }}>
+                <div className="panel-head print-hide">
                   <div>
-                    <h3>Performance & Ledger Table</h3>
-                    <p>Date: {paperWorkDate}</p>
+                    <h3>Performance & Ledger Table {activePaperworkPrintReport ? `(Viewing Saved Report: ${activePaperworkPrintReport.date})` : ""}</h3>
+                    <p>Date: {activePaperworkPrintReport ? activePaperworkPrintReport.date : paperWorkDate}</p>
                   </div>
+                  {activePaperworkPrintReport && (
+                    <div style={{ display: "flex", gap: "10px" }}>
+                      <button className="print-hide primary-btn" style={{ height: "32px", padding: "0 12px", background: "#3b82f6", fontSize: "11px" }} onClick={() => window.print()}>
+                        🖨️ Print / Download PDF
+                      </button>
+                      <button className="print-hide primary-btn" style={{ height: "32px", padding: "0 12px", background: "#64748b", fontSize: "11px" }} onClick={() => setActivePaperworkPrintReport(null)}>
+                        Close Saved View
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="table-wrap">
                   <table>
@@ -1054,12 +1403,12 @@ function App() {
                         <th>Online</th>
                         <th>Bill</th>
                         <th>Charge</th>
-                        <th>Salary (Editable)</th>
+                        <th>Salary</th>
                         <th>Fine</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {paperWorkTableRows.map((row) => (
+                      {(activePaperworkPrintReport ? activePaperworkPrintReport.rows : paperWorkTableRows).map((row) => (
                         <tr key={row.riderId}>
                           <td><strong>{row.name}</strong></td>
                           <td>{row.delivered}</td>
@@ -1067,34 +1416,38 @@ function App() {
                           <td>{money(row.bill)}</td>
                           <td>{money(row.charge)}</td>
                           <td>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={row.salary}
-                              onChange={(e) => handleUpdateSalary(row.riderId, e.target.value)}
-                              style={{ width: "100px", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e1", fontWeight: "700", fontSize: "13px" }}
-                            />
+                            {activePaperworkPrintReport ? (
+                              money(row.salary)
+                            ) : (
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={row.salary}
+                                onChange={(e) => handleUpdateSalary(row.riderId, e.target.value)}
+                                style={{ width: "90px", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e1", fontWeight: "700", fontSize: "13px" }}
+                              />
+                            )}
                           </td>
                           <td>{money(row.fine)}</td>
                         </tr>
                       ))}
-                      {paperWorkTableRows.length === 0 && (
+                      {(!activePaperworkPrintReport && paperWorkTableRows.length === 0) && (
                         <tr>
                           <td colSpan={7} className="empty-cell">Please select at least one rider to view paper work metrics.</td>
                         </tr>
                       )}
                     </tbody>
-                    {paperWorkTableRows.length > 0 && (
+                    {(activePaperworkPrintReport ? activePaperworkPrintReport.rows : paperWorkTableRows).length > 0 && (
                       <tfoot>
                         <tr>
                           <th>All Total</th>
-                          <th>{paperWorkTotals.delivered}</th>
-                          <th>{money(paperWorkTotals.online)}</th>
-                          <th>{money(paperWorkTotals.bill)}</th>
-                          <th>{money(paperWorkTotals.charge)}</th>
-                          <th>{money(paperWorkTotals.salary)}</th>
-                          <th>{money(paperWorkTotals.fine)}</th>
+                          <th>{activePaperworkPrintReport ? activePaperworkPrintReport.totals.delivered : paperWorkTotals.delivered}</th>
+                          <th>{money(activePaperworkPrintReport ? activePaperworkPrintReport.totals.online : paperWorkTotals.online)}</th>
+                          <th>{money(activePaperworkPrintReport ? activePaperworkPrintReport.totals.bill : paperWorkTotals.bill)}</th>
+                          <th>{money(activePaperworkPrintReport ? activePaperworkPrintReport.totals.charge : paperWorkTotals.charge)}</th>
+                          <th>{money(activePaperworkPrintReport ? activePaperworkPrintReport.totals.salary : paperWorkTotals.salary)}</th>
+                          <th>{money(activePaperworkPrintReport ? activePaperworkPrintReport.totals.fine : paperWorkTotals.fine)}</th>
                         </tr>
                       </tfoot>
                     )}
@@ -1102,16 +1455,34 @@ function App() {
                 </div>
               </div>
 
-              {/* Profit Calculation Section */}
-              <div className="panel" style={{ textAlign: "center", padding: "35px", background: "linear-gradient(135deg, #f0fdf4 0%, #e6f6ef 100%)", border: "2px solid #bbf7d0" }}>
-                <div style={{ fontSize: "16px", fontWeight: "800", color: "#15803d", letterSpacing: "2px" }}>PROFIT SUMMARY</div>
-                <div style={{ fontSize: "15px", fontWeight: "700", color: "#334155", margin: "8px 0 18px" }}>Date: {paperWorkDate}</div>
-                <div style={{ fontSize: "44px", fontWeight: "900", color: "#14532d", margin: "12px 0" }}>
-                  {money(calculatedProfit)}
+              {/* Profit Summary Box */}
+              <div style={{ marginTop: "30px", padding: "25px", background: "linear-gradient(135deg, #f0fdf4 0%, #e6f6ef 100%)", border: "2px solid #bbf7d0", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
+                <div style={{ fontSize: "14px", fontWeight: "800", color: "#15803d", letterSpacing: "1px" }}>PROFIT SUMMARY</div>
+                <div style={{ fontSize: "40px", fontWeight: "900", color: "#14532d", margin: "6px 0 0" }}>
+                  {money(activePaperworkPrintReport ? activePaperworkPrintReport.profit : calculatedProfit)}
                 </div>
-                <div style={{ fontSize: "14px", fontWeight: "700", color: "#1e293b" }}>
-                  Formula: (Total Bill × 9.4%) + Total Charge = ({money(paperWorkTotals.bill)} × 9.4%) + {money(paperWorkTotals.charge)}
+                <div style={{ fontSize: "12px", fontWeight: "700", color: "#334155", marginTop: "4px" }}>
+                  Formula: (Total Bill × 9.41%) + Total Charge
                 </div>
+              </div>
+
+              {/* Signatures Section */}
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
+                <div style={{ textAlign: "center", width: "220px" }}>
+                  <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
+                  <strong style={{ fontSize: "14px", color: "#0f172a" }}>Manager Sign</strong>
+                </div>
+                <div style={{ textAlign: "center", width: "220px" }}>
+                  <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
+                  <strong style={{ fontSize: "14px", color: "#0f172a" }}>Director Sign</strong>
+                </div>
+              </div>
+
+              <div style={{ marginTop: "25px", display: "flex", justifyContent: "flex-end", gap: "10px", position: "relative", zIndex: 1 }} className="print-hide">
+                <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+                {activePaperworkPrintReport && (
+                  <button className="primary-btn" onClick={() => setActivePaperworkPrintReport(null)} style={{ background: "#64748b" }}>Close Saved View</button>
+                )}
               </div>
             </div>
           </section>
@@ -1171,55 +1542,486 @@ function App() {
           </section>
         )}
 
+        {/* Restaurants Accounts & Orders Page */}
         {page === "restaurants" && (
           <section className="content">
-            <div className="section-heading"><div><h2>Restaurant accounts</h2><p>Restaurant-based sales and physical cash ledger</p></div></div>
+            <div className="section-heading">
+              <div>
+                <h2>Restaurant accounts & Orders</h2>
+                <p>View filtered orders with rider info and product details, check sales and physical cash ledger.</p>
+              </div>
+            </div>
+
             <div className="filter-bar">
-              <label>Restaurant<select value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)}>{restaurants.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}</select></label>
-              <label>Account date<input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} /></label>
+              <label>
+                Restaurant
+                <select value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)}>
+                  {restaurants.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Filter Date
+                <input type="date" value={resPageDate} onChange={(e) => setResPageDate(e.target.value)} />
+              </label>
+              <label>
+                Order Status Filter
+                <select value={resPageStatus} onChange={(e) => setResPageStatus(e.target.value)}>
+                  <option value="all">All Orders</option>
+                  <option value="delivered">Delivered Only</option>
+                  <option value="pending">Pending / Processing</option>
+                  <option value="on_the_way">On The Way</option>
+                  <option value="cancelled">Cancelled Only</option>
+                </select>
+              </label>
+              <label style={{ flex: 2 }}>
+                Search Orders (Order ID, Customer Name, Phone)
+                <input
+                  type="text"
+                  value={resPageSearch}
+                  onChange={(e) => setResPageSearch(e.target.value)}
+                  placeholder="Search in restaurant orders..."
+                />
+              </label>
             </div>
-            <div className="stats-grid">
-              <StatCard label="Restaurant item sales" value={money(restaurantSales)} hint="Selected date · delivered items" icon="৳" tone="green" />
-              <StatCard label="Physical amount" value={money(restaurantPhysicalTotal)} hint={`Physical entry total · ${selectedDate}`} icon="▣" tone="blue" />
-              <StatCard label="Matching orders" value={restaurantOrders.length} hint="Orders containing this restaurant's items" icon="▤" tone="purple" />
+
+            {/* Summary Boxes: Delivered Total, Not Delivered Total, Cancelled Total */}
+            <div className="stats-grid orders-card-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
+              <StatCard label="Delivered Subtotal" value={money(restaurantPageStats.deliveredTotal)} hint={`Delivered orders · ${resPageDate}`} icon="✓" tone="green" />
+              <StatCard label="Pending / On The Way" value={money(restaurantPageStats.pendingTotal)} hint={`Not delivered yet · ${resPageDate}`} icon="⌛" tone="orange" />
+              <StatCard label="Cancelled Subtotal" value={money(restaurantPageStats.cancelledTotal)} hint={`Cancelled orders · ${resPageDate}`} icon="×" tone="red" />
             </div>
+
+            {/* Physical Cash Box with Fresh Note & Edit Buttons inside Card Header */}
+            <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", marginBottom: "20px", boxShadow: "0 2px 7px rgba(20,33,59,0.03)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "15px" }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "11px", fontWeight: "700", color: "#64748b", letterSpacing: "0.5px" }}>PHYSICAL CASH COLLECTION ({resPageDate})</span>
+                    <button
+                      style={{ background: "#eff6ff", color: "#3b82f6", border: "1px solid #bfdbfe", borderRadius: "6px", padding: "2px 8px", fontSize: "11px", fontWeight: "700", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                      onClick={() => {
+                        setNoteModalEntry({
+                          type: "physical",
+                          entityType: "restaurant",
+                          entityId: restaurantId,
+                          entityName: selectedRestaurant?.name || "Restaurant",
+                          date: resPageDate,
+                          amount: restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0,
+                          note: restaurantPhysicalEntry ? (restaurantPhysicalEntry.note || "") : "",
+                        });
+                        setNoteInputVal(restaurantPhysicalEntry ? (restaurantPhysicalEntry.note || "") : "");
+                      }}
+                      title="View or Add Note"
+                    >
+                      📝 Note {restaurantPhysicalEntry?.note ? "•" : ""}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: "30px", fontWeight: "900", color: "#0f172a", marginTop: "6px" }}>
+                    {money(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0)}
+                  </div>
+                  {restaurantPhysicalEntry?.note && (
+                    <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
+                      "{restaurantPhysicalEntry.note}"
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <button
+                    className="primary-btn"
+                    style={{ background: "#10b981", height: "40px", padding: "0 16px", display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", fontWeight: "800" }}
+                    onClick={() => {
+                      setEditModalData({
+                        entityType: "restaurant",
+                        entityId: restaurantId,
+                        entityName: selectedRestaurant?.name || "Restaurant",
+                        type: "physical",
+                        amount: restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0,
+                        date: resPageDate,
+                        title: "Edit Physical Cash Amount"
+                      });
+                      setEditAmountVal(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : "");
+                    }}
+                    title="Edit Amount"
+                  >
+                    ✏️ Edit Amount
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Orders Table with Rider & Product Details */}
             <div className="panel">
-              <div className="panel-head"><div><h3>Restaurant order list</h3><p>Item subtotal excluding delivery and service charges</p></div></div>
-              <RestaurantOrderTable orders={restaurantOrders} />
-            </div>
-            <div className="panel">
-              <div className="panel-head"><div><h3>Physical account entry</h3><p>Cash ledger entries for restaurant</p></div></div>
-              <EntryForm amount={entryAmount} setAmount={setEntryAmount} note={entryNote} setNote={setEntryNote} onSubmit={saveManagementEntry} saving={saving} submitLabel="Save / Replace physical entry" />
-              <EntryTable entries={managementEntries.filter((e) => e.entityType === "restaurant" && String(e.entityId) === String(restaurantId) && dateKey(e.date || e.createdAt) === selectedDate)} onDelete={(id) => removeEntry(COLLECTIONS.management, id)} />
+              <div className="panel-head">
+                <div>
+                  <h3>Restaurant Orders ({restaurantPageOrders.length})</h3>
+                  <p>Detailed breakdown including rider info and product items</p>
+                </div>
+              </div>
+
+              <div className="table-wrap universal-card-list">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Order ID</th>
+                      <th>Customer</th>
+                      <th>Product Details (Items)</th>
+                      <th>Rider Details</th>
+                      <th>Time</th>
+                      <th>Status</th>
+                      <th className="right">Item Subtotal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {restaurantPageOrders.map((order, idx) => {
+                      const matchedRider = riders.find((r) => String(r.id) === String(order.riderId));
+                      const riderName = matchedRider ? (matchedRider.name || matchedRider.id) : (order.riderName || "—");
+                      const riderPhone = matchedRider ? (matchedRider.phone || "N/A") : (order.riderPhone || "N/A");
+
+                      const borderColors = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
+                      const cardBorderColor = borderColors[idx % borderColors.length];
+
+                      return (
+                        <tr key={order.id} style={{ "--card-border-color": cardBorderColor }}>
+                          <td data-label="Order ID"><strong>#{order.orderId || order.id.slice(0, 8)}</strong></td>
+                          <td data-label="Customer">
+                            <div className="card-value-block">
+                              <strong>{order.userName || "—"}</strong>
+                              <small className="cell-sub">{order.userPhone || ""}</small>
+                            </div>
+                          </td>
+                          <td data-label="Product Details (Items)">
+                            <div className="card-value-block">
+                              {Array.isArray(order.items) && order.items.length > 0 ? (
+                                <div style={{ display: "grid", gap: "2px" }}>
+                                  {order.items.map((it, i) => (
+                                    <div key={i} style={{ fontSize: "12px", color: "#334155" }}>
+                                      • <strong>{it.name || it.itemName || "Item"}</strong> (×{it.quantity || 1}) - {money((it.price || 0) * (it.quantity || 1))}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span>—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td data-label="Rider Details">
+                            <div className="card-value-block">
+                              <strong>{riderName}</strong>
+                              <small className="cell-sub">Phone: {riderPhone}</small>
+                            </div>
+                          </td>
+                          <td data-label="Time">{formatDateTime(order.createdAt)}</td>
+                          <td data-label="Status">
+                            <span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>
+                              {order.orderStatus || "Pending"}
+                            </span>
+                          </td>
+                          <td data-label="Item Subtotal" className="right"><strong>{money(order.restaurantSubtotal)}</strong></td>
+                        </tr>
+                      );
+                    })}
+                    {restaurantPageOrders.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="empty-cell">No orders found matching your search and filters.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </section>
         )}
 
+        {/* Riders Accounts & Orders Page */}
         {page === "riders" && (
           <section className="content">
-            <div className="section-heading"><div><h2>Rider accounts</h2><p>COD collection, fine and daily salary tracking</p></div></div>
+            <div className="section-heading">
+              <div>
+                <h2>Rider accounts & Orders</h2>
+                <p>View rider-specific orders with product details, status filters, and editable COD, Fine & Salary boxes with separate note/edit buttons at the bottom.</p>
+              </div>
+            </div>
+
             <div className="filter-bar">
-              <label>Rider<select value={riderId} onChange={(e) => setRiderId(e.target.value)}>{riders.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}</select></label>
-              <label>Account date<input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} /></label>
+              <label>
+                Rider
+                <select value={riderId} onChange={(e) => setRiderId(e.target.value)}>
+                  {riders.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Filter Date
+                <input type="date" value={riderPageDate} onChange={(e) => setRiderPageDate(e.target.value)} />
+              </label>
+              <label>
+                Order Status Filter
+                <select value={riderPageStatus} onChange={(e) => setRiderPageStatus(e.target.value)}>
+                  <option value="all">All Orders</option>
+                  <option value="delivered">Delivered Only</option>
+                  <option value="pending">Pending / Processing</option>
+                  <option value="on_the_way">On The Way</option>
+                  <option value="cancelled">Cancelled Only</option>
+                </select>
+              </label>
+              <label style={{ flex: 2 }}>
+                Search Orders (Order ID, Customer Name, Phone, Restaurant)
+                <input
+                  type="text"
+                  value={riderPageSearch}
+                  onChange={(e) => setRiderPageSearch(e.target.value)}
+                  placeholder="Search in rider orders..."
+                />
+              </label>
             </div>
-            <div className="stats-grid">
-              <StatCard label="Collection" value={money(riderCollectionTotal)} hint={`Selected date · ${selectedDate}`} icon="৳" tone="blue" />
-              <StatCard label="Fine" value={money(riderFineTotal)} hint="Selected date total" icon="!" tone="red" />
-              <StatCard label="Salary" value={money(riderSalaryTotal)} hint="Selected date total" icon="＋" tone="orange" />
-              <StatCard label="Delivered COD handled" value={money(riderCOD)} hint={`${riderOrders.length} delivered orders`} icon="✓" tone="green" />
+
+            {/* Rider Summary Boxes: Delivered, Pending, Cancelled */}
+            <div className="stats-grid orders-card-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
+              <StatCard label="Delivered Orders Total" value={money(riderPageStats.deliveredTotal)} hint={`Delivered orders · ${riderPageDate}`} icon="✓" tone="green" />
+              <StatCard label="Pending / On The Way" value={money(riderPageStats.pendingTotal)} hint={`Not delivered yet · ${riderPageDate}`} icon="⌛" tone="orange" />
+              <StatCard label="Cancelled Orders Total" value={money(riderPageStats.cancelledTotal)} hint={`Cancelled orders · ${riderPageDate}`} icon="×" tone="red" />
             </div>
+
+            {/* Rider Management Boxes (COD Collection, Fine, Salary) with Note & Edit buttons strictly at the Bottom */}
+            <div className="stats-grid orders-card-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
+
+              {/* COD Box */}
+              <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", margin: 0, boxShadow: "0 2px 7px rgba(20,33,59,0.03)", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: "150px" }}>
+                <div>
+                  <span style={{ fontSize: "11px", fontWeight: "800", color: "#64748b", letterSpacing: "0.5px" }}>COD COLLECTION</span>
+                  <div style={{ fontSize: "28px", fontWeight: "900", color: "#0f172a", marginTop: "6px" }}>
+                    {money(riderCollectionEntry ? riderCollectionEntry.amount : 0)}
+                  </div>
+                  {riderCollectionEntry?.note && (
+                    <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
+                      Note: "{riderCollectionEntry.note}"
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: "10px", borderTop: "1px solid #f1f5f9", marginTop: "15px", paddingTop: "12px" }}>
+                  <button
+                    style={{ flex: 1, background: "#eff6ff", color: "#3b82f6", border: "1px solid #bfdbfe", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
+                    onClick={() => {
+                      setNoteModalEntry({
+                        type: "collection",
+                        entityType: "rider",
+                        entityId: riderId,
+                        entityName: selectedRider?.name || "Rider",
+                        date: riderPageDate,
+                        amount: riderCollectionEntry ? riderCollectionEntry.amount : 0,
+                        note: riderCollectionEntry ? (riderCollectionEntry.note || "") : "",
+                      });
+                      setNoteInputVal(riderCollectionEntry ? (riderCollectionEntry.note || "") : "");
+                    }}
+                  >
+                    📝 Note {riderCollectionEntry?.note ? "•" : ""}
+                  </button>
+                  <button
+                    style={{ flex: 1, background: "#ecfdf5", color: "#059669", border: "1px solid #a7f3d0", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
+                    onClick={() => {
+                      setEditModalData({
+                        entityType: "rider",
+                        entityId: riderId,
+                        entityName: selectedRider?.name || "Rider",
+                        type: "collection",
+                        amount: riderCollectionEntry ? riderCollectionEntry.amount : 0,
+                        date: riderPageDate,
+                        title: "Edit COD Collection Amount"
+                      });
+                      setEditAmountVal(riderCollectionEntry ? riderCollectionEntry.amount : "");
+                    }}
+                  >
+                    ✏️ Edit
+                  </button>
+                </div>
+              </div>
+
+              {/* Fine Box */}
+              <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", margin: 0, boxShadow: "0 2px 7px rgba(20,33,59,0.03)", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: "150px" }}>
+                <div>
+                  <span style={{ fontSize: "11px", fontWeight: "800", color: "#64748b", letterSpacing: "0.5px" }}>FINE AMOUNT</span>
+                  <div style={{ fontSize: "28px", fontWeight: "900", color: "#e25b56", marginTop: "6px" }}>
+                    {money(riderFineEntry ? riderFineEntry.amount : 0)}
+                  </div>
+                  {riderFineEntry?.note && (
+                    <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
+                      Note: "{riderFineEntry.note}"
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: "10px", borderTop: "1px solid #f1f5f9", marginTop: "15px", paddingTop: "12px" }}>
+                  <button
+                    style={{ flex: 1, background: "#eff6ff", color: "#3b82f6", border: "1px solid #bfdbfe", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
+                    onClick={() => {
+                      setNoteModalEntry({
+                        type: "fine",
+                        entityType: "rider",
+                        entityId: riderId,
+                        entityName: selectedRider?.name || "Rider",
+                        date: riderPageDate,
+                        amount: riderFineEntry ? riderFineEntry.amount : 0,
+                        note: riderFineEntry ? (riderFineEntry.note || "") : "",
+                      });
+                      setNoteInputVal(riderFineEntry ? (riderFineEntry.note || "") : "");
+                    }}
+                  >
+                    📝 Note {riderFineEntry?.note ? "•" : ""}
+                  </button>
+                  <button
+                    style={{ flex: 1, background: "#ecfdf5", color: "#059669", border: "1px solid #a7f3d0", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
+                    onClick={() => {
+                      setEditModalData({
+                        entityType: "rider",
+                        entityId: riderId,
+                        entityName: selectedRider?.name || "Rider",
+                        type: "fine",
+                        amount: riderFineEntry ? riderFineEntry.amount : 0,
+                        date: riderPageDate,
+                        title: "Edit Fine Amount"
+                      });
+                      setEditAmountVal(riderFineEntry ? riderFineEntry.amount : "");
+                    }}
+                  >
+                    ✏️ Edit
+                  </button>
+                </div>
+              </div>
+
+              {/* Salary Box */}
+              <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", margin: 0, boxShadow: "0 2px 7px rgba(20,33,59,0.03)", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: "150px" }}>
+                <div>
+                  <span style={{ fontSize: "11px", fontWeight: "800", color: "#64748b", letterSpacing: "0.5px" }}>DAILY SALARY</span>
+                  <div style={{ fontSize: "28px", fontWeight: "900", color: "#16a34a", marginTop: "6px" }}>
+                    {money(riderSalaryEntry ? riderSalaryEntry.amount : 0)}
+                  </div>
+                  {riderSalaryEntry?.note && (
+                    <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
+                      Note: "{riderSalaryEntry.note}"
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: "10px", borderTop: "1px solid #f1f5f9", marginTop: "15px", paddingTop: "12px" }}>
+                  <button
+                    style={{ flex: 1, background: "#eff6ff", color: "#3b82f6", border: "1px solid #bfdbfe", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
+                    onClick={() => {
+                      setNoteModalEntry({
+                        type: "salary",
+                        entityType: "rider",
+                        entityId: riderId,
+                        entityName: selectedRider?.name || "Rider",
+                        date: riderPageDate,
+                        amount: riderSalaryEntry ? riderSalaryEntry.amount : 0,
+                        note: riderSalaryEntry ? (riderSalaryEntry.note || "") : "",
+                      });
+                      setNoteInputVal(riderSalaryEntry ? (riderSalaryEntry.note || "") : "");
+                    }}
+                  >
+                    📝 Note {riderSalaryEntry?.note ? "•" : ""}
+                  </button>
+                  <button
+                    style={{ flex: 1, background: "#ecfdf5", color: "#059669", border: "1px solid #a7f3d0", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
+                    onClick={() => {
+                      setEditModalData({
+                        entityType: "rider",
+                        entityId: riderId,
+                        entityName: selectedRider?.name || "Rider",
+                        type: "salary",
+                        amount: riderSalaryEntry ? riderSalaryEntry.amount : 0,
+                        date: riderPageDate,
+                        title: "Edit Salary Amount"
+                      });
+                      setEditAmountVal(riderSalaryEntry ? riderSalaryEntry.amount : "");
+                    }}
+                  >
+                    ✏️ Edit
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Rider Orders Table with Product Details */}
             <div className="panel">
-              <div className="panel-head"><div><h3>Daily account entry</h3><p>Record collection, fine and salary separately</p></div></div>
-              <form className="entry-form rider-entry-form" onSubmit={saveManagementEntry}>
-                <label>Total collection (৳)<input type="number" min="0" step="0.01" value={riderCollectionAmount} onChange={(e) => setRiderCollectionAmount(e.target.value)} placeholder="Collection amount" /></label>
-                <label>Fine (৳)<input type="number" min="0" step="0.01" value={riderFineAmount} onChange={(e) => setRiderFineAmount(e.target.value)} placeholder="Fine amount" /></label>
-                <label>Today salary (৳)<input type="number" min="0" step="0.01" value={riderSalaryAmount} onChange={(e) => setRiderSalaryAmount(e.target.value)} placeholder="Salary amount" /></label>
-                <label className="note-field">Note<input value={entryNote} onChange={(e) => setEntryNote(e.target.value)} placeholder="Add a note (optional)" /></label>
-                <button className="primary-btn" disabled={saving}>{saving ? "Saving…" : "Save / Replace entries"}</button>
-              </form>
-              <EntryTable entries={managementEntries.filter((entry) => entry.entityType === "rider" && String(entry.entityId) === String(riderId) && dateKey(entry.date || entry.createdAt) === selectedDate)} onDelete={(id) => removeEntry(COLLECTIONS.management, id)} />
+              <div className="panel-head">
+                <div>
+                  <h3>Rider Orders ({riderPageOrders.length})</h3>
+                  <p>Detailed breakdown including product items and payment status</p>
+                </div>
+              </div>
+
+              <div className="table-wrap universal-card-list">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Order ID</th>
+                      <th>Customer</th>
+                      <th>Restaurant(s)</th>
+                      <th>Product Details (Items)</th>
+                      <th>Time</th>
+                      <th>Payment</th>
+                      <th>Status</th>
+                      <th className="right">Total Price</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {riderPageOrders.map((order, idx) => {
+                      const restNames = getOrderRestaurants(order.items);
+                      const borderColors = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
+                      const cardBorderColor = borderColors[idx % borderColors.length];
+
+                      return (
+                        <tr key={order.id} style={{ "--card-border-color": cardBorderColor }}>
+                          <td data-label="Order ID"><strong>#{order.orderId || order.id.slice(0, 8)}</strong></td>
+                          <td data-label="Customer">
+                            <div className="card-value-block">
+                              <strong>{order.userName || "—"}</strong>
+                              <small className="cell-sub">{order.userPhone || ""}</small>
+                            </div>
+                          </td>
+                          <td data-label="Restaurant(s)">
+                            <div className="card-value-block">
+                              <span style={{ fontWeight: "700" }}>{restNames}</span>
+                            </div>
+                          </td>
+                          <td data-label="Product Details (Items)">
+                            <div className="card-value-block">
+                              {Array.isArray(order.items) && order.items.length > 0 ? (
+                                <div style={{ display: "grid", gap: "2px" }}>
+                                  {order.items.map((it, i) => (
+                                    <div key={i} style={{ fontSize: "12px", color: "#334155" }}>
+                                      • <strong>{it.name || it.itemName || "Item"}</strong> (×{it.quantity || 1}) - {money((it.price || 0) * (it.quantity || 1))}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span>—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td data-label="Time">{formatDateTime(order.createdAt)}</td>
+                          <td data-label="Payment">{order.payment || order.paymentMethod || "—"}</td>
+                          <td data-label="Status">
+                            <span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>
+                              {order.orderStatus || "Pending"}
+                            </span>
+                          </td>
+                          <td data-label="Total Price" className="right"><strong>{money(orderAmount(order))}</strong></td>
+                        </tr>
+                      );
+                    })}
+                    {riderPageOrders.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="empty-cell">No orders found matching your search and filters.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-            <div className="panel"><div className="panel-head"><div><h3>Rider delivered orders</h3><p>Selected date · delivered only</p></div></div><OrderTable orders={riderOrders} /></div>
           </section>
         )}
 
@@ -1240,7 +2042,52 @@ function App() {
                 <button className="primary-btn" disabled={saving}>{saving ? "Saving…" : `Add ${onlineMethod} entry`}</button>
               </form>
               <div className="panel-head list-heading"><div><h3>{onlineMethod} entries</h3><p>{selectedDate}</p></div><span className="count-pill">{filteredOnline.length} entries</span></div>
-              <EntryTable entries={filteredOnline} onDelete={(id) => removeEntry(COLLECTIONS.online, id)} showMethod />
+
+              {/* Online Accounts Entries as 3 Boxes per Row */}
+              <div className="online-boxes-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "15px", marginTop: "20px" }}>
+                {filteredOnline.map((entry, idx) => {
+                  const colors = ["#ec4899", "#f59e0b", "#3b82f6", "#10b981", "#8b5cf6"];
+                  const bColor = colors[idx % colors.length];
+                  return (
+                    <div key={entry.id} style={{ background: "#fff", border: `2px solid ${bColor}`, borderRadius: "12px", padding: "14px", boxShadow: "0 2px 8px rgba(0,0,0,0.04)", position: "relative" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: "6px" }}>
+                        <span style={{ fontSize: "10px", fontWeight: "800", textTransform: "uppercase", color: "#64748b" }}>{entry.method || onlineMethod}</span>
+                        <span style={{ fontSize: "10px", fontWeight: "700", color: "#334155" }}>{formatDateTime(entry.createdAt || entry.date)}</span>
+                      </div>
+                      <div style={{ fontSize: "22px", fontWeight: "900", color: "#0f172a", marginBottom: "4px" }}>{money(entry.amount)}</div>
+                      <div style={{ fontSize: "11px", color: "#475569", fontStyle: "italic", marginBottom: "10px" }}>"{entry.note || "No note"}"</div>
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <button
+                          type="button"
+                          style={{ background: "#fff1f0", color: "#d35b54", border: 0, borderRadius: "6px", padding: "5px 10px", fontSize: "10px", fontWeight: "800", cursor: "pointer", zIndex: 10, position: "relative" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteModalData({
+                              collectionName: COLLECTIONS.online,
+                              id: entry.id,
+                              title: "Delete Online Entry",
+                              message: "Are you sure you want to delete this online entry?",
+                              onConfirm: async () => {
+                                try {
+                                  await deleteDoc(doc(db, COLLECTIONS.online, entry.id));
+                                  setNotice({ type: "success", text: "Entry deleted successfully." });
+                                } catch (err) {
+                                  setNotice({ type: "error", text: `Delete failed: ${err.message}` });
+                                }
+                              }
+                            });
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {filteredOnline.length === 0 && (
+                  <div style={{ gridColumn: "1 / -1", textAlign: "center", color: "#9aa5b5", padding: "30px" }}>No {onlineMethod} entries found for {selectedDate}.</div>
+                )}
+              </div>
             </div>
           </section>
         )}
@@ -1248,23 +2095,377 @@ function App() {
         {page === "history" && (
           <section className="content">
             <div className="section-heading"><div><h2>History & reports</h2><p>Date range-based consolidated accounts report</p></div></div>
-            <div className="filter-bar">
+            <div className="filter-bar print-hide">
               <label>Account type<select value={historyType} onChange={(e) => setHistoryType(e.target.value)}><option value="restaurant">Restaurant</option><option value="rider">Rider</option><option value="online">Online</option></select></label>
               {historyType === "restaurant" && <label>Restaurant<select value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)}>{restaurants.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}</select></label>}
               {historyType === "rider" && <label>Rider<select value={riderId} onChange={(e) => setRiderId(e.target.value)}>{riders.map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}</select></label>}
               <label>Start date<input type="date" value={historyStart} onChange={(e) => setHistoryStart(e.target.value)} /></label>
               <label>End date<input type="date" value={historyEnd} min={historyStart} onChange={(e) => setHistoryEnd(e.target.value)} /></label>
+
+              <div style={{ display: "flex", gap: "10px", alignItems: "flex-end", height: "38px" }}>
+                <button className="primary-btn" onClick={() => saveEntityReportArchive(historyType)} style={{ height: "38px", padding: "0 16px" }}>💾 Save Permanent Report</button>
+                <button className="primary-btn" onClick={() => window.print()} style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}>🖨️ PDF Print</button>
+              </div>
             </div>
-            <div className="panel">
-              <div className="panel-head"><div><h3>Date-wise summary</h3><p>Selected period totals</p></div><span className="count-pill">{historyRows.length} days</span></div>
-              <div className="table-wrap"><table><thead><tr><th>Date</th>{historyType === "restaurant" && <th>Item sales</th>}{historyType !== "online" && <><th>Collection</th>{historyType === "rider" && <th>COD amount</th>}<th>Fine</th><th>Salary</th></>}{historyType === "online" && <><th>bKash</th><th>Nagad</th></>}</tr></thead><tbody>{historyRows.map((row) => <tr key={row.date}><td>{row.date}</td>{historyType === "restaurant" && <td>{money(row.sales)}</td>}{historyType !== "online" && <><td>{money(row.collection)}</td>{historyType === "rider" && <td>{money(row.cod)}</td>}<td>{money(row.fine)}</td><td>{money(row.salary)}</td></>}{historyType === "online" && <><td>{money(row.bkash)}</td><td>{money(row.nagad)}</td></>}</tr>)}{!historyRows.length && <EmptyRow colSpan={historyType === "online" ? 3 : historyType === "restaurant" ? 5 : 4} />}</tbody>{historyRows.length > 0 && <tfoot><tr><th>Grand total</th>{historyType === "restaurant" && <th>{money(historyTotals.sales)}</th>}{historyType !== "online" && <><th>{money(historyTotals.collection)}</th>{historyType === "rider" && <th>{money(historyTotals.cod)}</th>}<th>{money(historyTotals.fine)}</th><th>{money(historyTotals.salary)}</th></>}{historyType === "online" && <><th>{money(historyTotals.bkash)}</th><th>{money(historyTotals.nagad)}</th></>}</tr></tfoot>}</table></div>
-            </div>
-            <div className="panel"><div className="panel-head"><div><h3>Saved entries</h3><p>Ledger records for selected date range</p></div></div><EntryTable entries={historySavedEntries} onDelete={(id) => removeEntry(historyType === "online" ? COLLECTIONS.online : COLLECTIONS.management, id)} showMethod={historyType === "online"} /></div>
+
+            {/* Saved Archive Reports List */}
+            {savedEntityReports.filter(r => r.type === historyType).length > 0 && (
+              <div className="panel print-hide">
+                <div className="panel-head"><div><h3>Saved {historyType === "restaurant" ? "Restaurant" : (historyType === "rider" ? "Rider" : "Online")} Reports Archive</h3><p>View or delete previously saved permanent reports</p></div></div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Entity Name</th>
+                        <th>Date Range</th>
+                        <th>Saved At</th>
+                        <th className="right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {savedEntityReports.filter(r => r.type === historyType).map((rep) => (
+                        <tr key={rep.id}>
+                          <td><strong>{rep.entityName}</strong></td>
+                          <td>{rep.startDate} to {rep.endDate}</td>
+                          <td>{formatDateTime(rep.savedAt)}</td>
+                          <td className="right" style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                            <button className="primary-btn" style={{ height: "30px", padding: "0 12px", fontSize: "11px" }} onClick={() => setActiveReportPrintData(rep)}>
+                              👁️ View / Print
+                            </button>
+                            <button className="delete-btn" style={{ height: "30px", padding: "0 12px", fontSize: "11px" }} onClick={() => deleteSavedEntityReport(rep.id)}>
+                              🗑️ Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Restaurant Specific Report View (Printable / Active View with Watermark) */}
+            {historyType === "restaurant" && (
+              <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
+
+                {/* PDF Watermark Logo Center */}
+                <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
+                  <FoodishLogo size={360} />
+                </div>
+
+                {/* PDF Header with FOODISH Branding & Logo */}
+                <div className="print-header" style={{ textAlign: "center", marginBottom: "30px", position: "relative", zIndex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
+                    <FoodishLogo size={36} />
+                    <span style={{ fontSize: "28px", fontWeight: "900", letterSpacing: "2px", color: "#10b981" }}>FOODISH</span>
+                  </div>
+                  <h1 style={{ fontSize: "32px", fontWeight: "900", color: "#0f172a", margin: "0 0 8px", textTransform: "uppercase" }}>
+                    {activeReportPrintData ? activeReportPrintData.entityName : (selectedRestaurant?.name || "Restaurant Report")}
+                  </h1>
+                  <p style={{ fontSize: "16px", fontWeight: "700", color: "#475569", margin: 0 }}>
+                    Date Range: {activeReportPrintData ? activeReportPrintData.startDate : historyStart} to {activeReportPrintData ? activeReportPrintData.endDate : historyEnd}
+                  </p>
+                </div>
+
+                <div className="panel" style={{ border: 0, padding: 0, boxShadow: "none", position: "relative", zIndex: 1, background: "rgba(255,255,255,0.96)" }}>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Item Sales</th>
+                          <th className="right">Physical Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(activeReportPrintData ? activeReportPrintData.rows : historyRestaurantRows).map((row) => (
+                          <tr key={row.date}>
+                            <td><strong>{row.date}</strong></td>
+                            <td>{money(row.itemSales)}</td>
+                            <td className="right">{money(row.physicalAmount)}</td>
+                          </tr>
+                        ))}
+                        {(!activeReportPrintData && historyRestaurantRows.length === 0) && <EmptyRow colSpan={3} />}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <th>TOTAL</th>
+                          <th>{money(activeReportPrintData ? activeReportPrintData.totals.itemSales : historyRestaurantTotals.itemSales)}</th>
+                          <th className="right">{money(activeReportPrintData ? activeReportPrintData.totals.physicalAmount : historyRestaurantTotals.physicalAmount)}</th>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Big Physical Count Total */}
+                <div style={{ marginTop: "30px", padding: "20px", background: "#f8fafc", border: "2px dashed #cbd5e1", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
+                  <div style={{ fontSize: "14px", fontWeight: "800", color: "#64748b", letterSpacing: "1px" }}>PHYSICAL COUNT TOTAL</div>
+                  <div style={{ fontSize: "40px", fontWeight: "900", color: "#0f172a", margin: "6px 0 0" }}>
+                    {money(activeReportPrintData ? activeReportPrintData.totals.physicalAmount : historyRestaurantTotals.physicalAmount)}
+                  </div>
+                </div>
+
+                {/* Signatures Section */}
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
+                  <div style={{ textAlign: "center", width: "220px" }}>
+                    <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
+                    <strong style={{ fontSize: "14px", color: "#0f172a" }}>Restaurant Owner Sign</strong>
+                  </div>
+                  <div style={{ textAlign: "center", width: "220px" }}>
+                    <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
+                    <strong style={{ fontSize: "14px", color: "#0f172a" }}>Manager Sign</strong>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: "25px", display: "flex", justifyContent: "flex-end", gap: "10px", position: "relative", zIndex: 1 }} className="print-hide">
+                  <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+                  {activeReportPrintData && (
+                    <button className="primary-btn" onClick={() => setActiveReportPrintData(null)} style={{ background: "#64748b" }}>Close Archive View</button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Rider Specific Report View with Net Salary Calculation & Signatures */}
+            {historyType === "rider" && (
+              <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
+
+                {/* PDF Watermark Logo Center */}
+                <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
+                  <FoodishLogo size={360} />
+                </div>
+
+                {/* PDF Header with FOODISH Branding & Logo */}
+                <div className="print-header" style={{ textAlign: "center", marginBottom: "30px", position: "relative", zIndex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
+                    <FoodishLogo size={36} />
+                    <span style={{ fontSize: "28px", fontWeight: "900", letterSpacing: "2px", color: "#10b981" }}>FOODISH</span>
+                  </div>
+                  <h1 style={{ fontSize: "32px", fontWeight: "900", color: "#0f172a", margin: "0 0 8px", textTransform: "uppercase" }}>
+                    {activeReportPrintData ? activeReportPrintData.entityName : (selectedRider?.name || "Rider Report")}
+                  </h1>
+                  <p style={{ fontSize: "16px", fontWeight: "700", color: "#475569", margin: 0 }}>
+                    Date Range: {activeReportPrintData ? activeReportPrintData.startDate : historyStart} to {activeReportPrintData ? activeReportPrintData.endDate : historyEnd}
+                  </p>
+                </div>
+
+                <div className="panel" style={{ border: 0, padding: 0, boxShadow: "none", position: "relative", zIndex: 1, background: "rgba(255,255,255,0.96)" }}>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Delivered</th>
+                          <th>COD Amount</th>
+                          <th>Collection</th>
+                          <th>Fine</th>
+                          <th className="right">Salary</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(activeReportPrintData ? activeReportPrintData.rows : historyRiderRows).map((row) => (
+                          <tr key={row.date}>
+                            <td><strong>{row.date}</strong></td>
+                            <td>{row.deliveredCount}</td>
+                            <td>{money(row.deliveredCod)}</td>
+                            <td>{money(row.collection)}</td>
+                            <td>{money(row.fine)}</td>
+                            <td className="right">{money(row.salary)}</td>
+                          </tr>
+                        ))}
+                        {(!activeReportPrintData && historyRiderRows.length === 0) && <EmptyRow colSpan={6} />}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <th>TOTAL</th>
+                          <th>{activeReportPrintData ? activeReportPrintData.totals.deliveredCount : historyRiderTotals.deliveredCount}</th>
+                          <th>{money(activeReportPrintData ? activeReportPrintData.totals.deliveredCod : historyRiderTotals.deliveredCod)}</th>
+                          <th>{money(activeReportPrintData ? activeReportPrintData.totals.collection : historyRiderTotals.collection)}</th>
+                          <th>{money(activeReportPrintData ? activeReportPrintData.totals.fine : historyRiderTotals.fine)}</th>
+                          <th className="right">{money(activeReportPrintData ? activeReportPrintData.totals.salary : historyRiderTotals.salary)}</th>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Big Net Salary Calculation Box (Salary = Total Salary - Fine) */}
+                <div style={{ marginTop: "30px", padding: "20px", background: "#f0fdf4", border: "2px solid #bbf7d0", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
+                  <div style={{ fontSize: "14px", fontWeight: "800", color: "#15803d", letterSpacing: "1px" }}>NET SALARY (TOTAL SALARY - FINE)</div>
+                  <div style={{ fontSize: "40px", fontWeight: "900", color: "#14532d", margin: "6px 0 0" }}>
+                    {money((activeReportPrintData ? activeReportPrintData.totals.salary : historyRiderTotals.salary) - (activeReportPrintData ? activeReportPrintData.totals.fine : historyRiderTotals.fine))}
+                  </div>
+                  <div style={{ fontSize: "12px", fontWeight: "700", color: "#334155", marginTop: "4px" }}>
+                    Total Salary ({money(activeReportPrintData ? activeReportPrintData.totals.salary : historyRiderTotals.salary)}) - Fine ({money(activeReportPrintData ? activeReportPrintData.totals.fine : historyRiderTotals.fine)})
+                  </div>
+                </div>
+
+                {/* Signatures Section */}
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
+                  <div style={{ textAlign: "center", width: "220px" }}>
+                    <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
+                    <strong style={{ fontSize: "14px", color: "#0f172a" }}>Rider Sign</strong>
+                  </div>
+                  <div style={{ textAlign: "center", width: "220px" }}>
+                    <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
+                    <strong style={{ fontSize: "14px", color: "#0f172a" }}>Manager Sign</strong>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: "25px", display: "flex", justifyContent: "flex-end", gap: "10px", position: "relative", zIndex: 1 }} className="print-hide">
+                  <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+                  {activeReportPrintData && (
+                    <button className="primary-btn" onClick={() => setActiveReportPrintData(null)} style={{ background: "#64748b" }}>Close Archive View</button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {historyType === "online" && (
+              <>
+                <div className="panel">
+                  <div className="panel-head"><div><h3>Date-wise summary</h3><p>Selected period totals</p></div><span className="count-pill">{historyRows.length} days</span></div>
+                  <div className="table-wrap"><table><thead><tr><th>Date</th><th>bKash</th><th className="right">Nagad</th></tr></thead><tbody>{historyRows.map((row) => <tr key={row.date}><td>{row.date}</td><td>{money(row.bkash)}</td><td className="right">{money(row.nagad)}</td></tr>)}{!historyRows.length && <EmptyRow colSpan={3} />}</tbody>{historyRows.length > 0 && <tfoot><tr><th>Grand total</th><th>{money(historyTotals.bkash)}</th><th className="right">{money(historyTotals.nagad)}</th></tr></tfoot>}</table></div>
+                </div>
+                <div className="panel"><div className="panel-head"><div><h3>Saved entries</h3><p>Ledger records for selected date range</p></div></div><EntryTable entries={historySavedEntries} onDelete={(id) => setDeleteModalData({ collectionName: COLLECTIONS.online, id, title: "Delete Online Entry", message: "Are you sure you want to delete this online entry?" })} showMethod={true} /></div>
+              </>
+            )}
           </section>
         )}
 
-        <footer className="footer print-hide">CityFood Accounts · Firebase Firestore · Built for internal operations</footer>
+        <footer className="footer print-hide">Foodish Accounts · Firebase Firestore · Built for internal operations</footer>
       </main>
+
+      {/* Note Modal Popup */}
+      {noteModalEntry && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 50, display: "grid", placeItems: "center", padding: "16px" }}>
+          <div style={{ background: "#fff", padding: "24px", borderRadius: "16px", width: "100%", maxWidth: "400px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }}>
+            <h3 style={{ margin: "0 0 10px", fontSize: "16px", fontWeight: "800", color: "#0f172a" }}>
+              Note for {noteModalEntry.entityName} ({noteModalEntry.date})
+            </h3>
+            <p style={{ fontSize: "12px", color: "#64748b", margin: "0 0 15px" }}>Type: {noteModalEntry.type.toUpperCase()} | Amount: {money(noteModalEntry.amount)}</p>
+            <textarea
+              value={noteInputVal}
+              onChange={(e) => setNoteInputVal(e.target.value)}
+              placeholder="Write a note here..."
+              rows={4}
+              style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "13px", outline: "none", marginBottom: "15px" }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+              <button
+                className="primary-btn"
+                style={{ background: "#64748b" }}
+                onClick={() => setNoteModalEntry(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-btn"
+                onClick={async () => {
+                  await handleUpdateManagementEntry({
+                    entityType: noteModalEntry.entityType,
+                    entityId: noteModalEntry.entityId,
+                    entityName: noteModalEntry.entityName,
+                    type: noteModalEntry.type,
+                    amount: noteModalEntry.amount,
+                    date: noteModalEntry.date,
+                    note: noteInputVal,
+                  });
+                  setNoteModalEntry(null);
+                }}
+              >
+                Save Note
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Beautiful Center Modal Popup for Edit Amount */}
+      {editModalData && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 60, display: "grid", placeItems: "center", padding: "16px", backdropFilter: "blur(2px)" }}>
+          <div style={{ background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "420px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)" }}>
+            <h3 style={{ margin: "0 0 6px", fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>{editModalData.title}</h3>
+            <p style={{ fontSize: "13px", color: "#64748b", margin: "0 0 20px" }}>{editModalData.entityName} · Date: {editModalData.date}</p>
+
+            <label style={{ display: "grid", gap: "6px", fontSize: "11px", fontWeight: "700", color: "#475569", marginBottom: "20px" }}>
+              New Amount (৳)
+              <input
+                type="number"
+                step="0.01"
+                value={editAmountVal}
+                onChange={(e) => setEditAmountVal(e.target.value)}
+                style={{ height: "46px", border: "1px solid #cbd5e1", borderRadius: "10px", padding: "0 14px", fontSize: "16px", fontWeight: "700", color: "#0f172a", outline: "none" }}
+                autoFocus
+              />
+            </label>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+              <button
+                className="primary-btn"
+                style={{ background: "#64748b", height: "42px", padding: "0 20px" }}
+                onClick={() => setEditModalData(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-btn"
+                style={{ background: "#10b981", height: "42px", padding: "0 20px" }}
+                onClick={async () => {
+                  if (editAmountVal === "" || Number.isNaN(Number(editAmountVal))) {
+                    alert("Sothik amount din.");
+                    return;
+                  }
+                  await handleUpdateManagementEntry({
+                    entityType: editModalData.entityType,
+                    entityId: editModalData.entityId,
+                    entityName: editModalData.entityName,
+                    type: editModalData.type,
+                    amount: editAmountVal,
+                    date: editModalData.date,
+                  });
+                  setEditModalData(null);
+                }}
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Beautiful Center Modal Popup for Delete Confirmation */}
+      {deleteModalData && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 60, display: "grid", placeItems: "center", padding: "16px", backdropFilter: "blur(2px)" }}>
+          <div style={{ background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "400px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)", textAlign: "center" }}>
+            <div style={{ width: "50px", height: "50px", borderRadius: "50%", background: "#fee2e2", color: "#dc2626", display: "grid", placeItems: "center", fontSize: "24px", margin: "0 auto 15px", fontWeight: "800" }}>!</div>
+            <h3 style={{ margin: "0 0 8px", fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>{deleteModalData.title}</h3>
+            <p style={{ fontSize: "13px", color: "#64748b", margin: "0 0 24px" }}>{deleteModalData.message}</p>
+
+            <div style={{ display: "flex", justifyContent: "center", gap: "12px" }}>
+              <button
+                className="primary-btn"
+                style={{ background: "#64748b", height: "42px", padding: "0 20px" }}
+                onClick={() => setDeleteModalData(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-btn"
+                style={{ background: "#dc2626", height: "42px", padding: "0 20px" }}
+                onClick={async () => {
+                  deleteModalData.onConfirm();
+                  setDeleteModalData(null);
+                }}
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {notice && <div className={`toast ${notice.type}`}><span>{notice.type === "success" ? "✓" : "!"}</span>{notice.text}</div>}
       {saving && <div className="saving-overlay"><div className="loader" /><strong>Saving your entry…</strong></div>}
     </div>
@@ -1279,27 +2480,15 @@ function EmptyRow({ colSpan = 6 }) {
   return <tr><td colSpan={colSpan} className="empty-cell">No records found for this selection.</td></tr>;
 }
 
-function OrderTable({ orders }) {
-  return <div className="table-wrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Time</th><th>Payment</th><th>Status</th><th className="right">Total</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td><strong>#{order.id.slice(0, 8)}</strong></td><td>{order.userName || "—"}<small className="cell-sub">{order.userPhone || ""}</small></td><td>{formatDateTime(order.createdAt)}</td><td>{order.payment || "—"}</td><td><span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>{order.orderStatus || "Pending"}</span></td><td className="right">{money(orderAmount(order))}</td></tr>)}{!orders.length && <EmptyRow />}</tbody></table></div>;
-}
-
-function RestaurantOrderTable({ orders }) {
-  return <div className="table-wrap"><table><thead><tr><th>Order ID</th><th>Customer</th><th>Time</th><th>Payment</th><th>Status</th><th className="right">Item subtotal</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td><strong>#{order.id.slice(0, 8)}</strong></td><td>{order.userName || "—"}</td><td>{formatDateTime(order.createdAt)}</td><td>{order.payment || "—"}</td><td><span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>{order.orderStatus || "Pending"}</span></td><td className="right">{money(order.restaurantSubtotal)}</td></tr>)}{!orders.length && <EmptyRow />}</tbody></table></div>;
-}
-
-function EntryForm({ amount, setAmount, note, setNote, onSubmit, saving, submitLabel }) {
-  return <form className="entry-form" onSubmit={onSubmit}><label>Amount (৳)<input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" required /></label><label className="note-field">Note<input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional details" /></label><button className="primary-btn" disabled={saving}>{saving ? "Saving…" : submitLabel}</button></form>;
-}
-
 function EntryTable({ entries, onDelete, showMethod = false }) {
   const sorted = [...entries].sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
-  return <div className="table-wrap"><table><thead><tr><th>Date / Time</th>{showMethod && <th>Method</th>}<th>Account / Type</th><th>Note</th><th className="right">Amount</th><th /></tr></thead><tbody>{sorted.map((entry) => <tr key={entry.id}><td>{formatDateTime(entry.createdAt || entry.date)}</td>{showMethod && <td>{entry.method || "—"}</td>}<td>{entry.entityName || entry.type || "—"}</td><td className="note-cell">{entry.note || "—"}</td><td className="right">{money(entry.amount)}</td><td>{!entry.readOnly && <button className="delete-btn" title="Delete entry" onClick={() => onDelete(entry.id)}>Delete</button>}</td></tr>)}{!sorted.length && <EmptyRow colSpan={showMethod ? 6 : 5} />}</tbody></table></div>;
+  return <div className="table-wrap"><table><thead><tr><th>Date / Time</th>{showMethod && <th>Method</th>}<th>Account / Type</th><th>Note</th><th className="right">Amount</th><th /></tr></thead><tbody>{sorted.map((entry) => <tr key={entry.id}><td>{formatDateTime(entry.createdAt || entry.date)}</td>{showMethod && <td>{entry.method || "—"}</td>}<td>{entry.entityName || entry.type || "—"}</td><td className="note-cell">{entry.note || "—"}</td><td className="right">{money(entry.amount)}</td><td>{!entry.readOnly && <button type="button" className="delete-btn" title="Delete entry" onClick={() => onDelete(entry.id)}>Delete</button>}</td></tr>)}{!sorted.length && <EmptyRow colSpan={showMethod ? 6 : 5} />}</tbody></table></div>;
 }
 
 const styles = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
 :root{font-family:'DM Sans',sans-serif;color:#172033;background:#f5f7fb;font-synthesis:none}
-*{box-sizing:border-box}body{margin:0}.app-shell{min-height:100vh;display:flex;background:#f5f7fb}.sidebar{width:250px;background:#111b2e;color:#d5deed;min-height:100vh;padding:27px 17px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:5}.brand{display:flex;align-items:center;gap:11px;padding:0 10px 37px}.brand-mark{width:39px;height:39px;border-radius:13px;background:linear-gradient(145deg,#35c98b,#16a875);display:grid;place-items:center;color:white;font-weight:800;font-size:22px}.brand strong{display:block;color:#fff;font:800 18px 'Plus Jakarta Sans'}.brand small{display:block;color:#8190a8;font-size:9px;letter-spacing:1.4px;margin-top:3px}.side-label,.eyebrow{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#8290a8}.side-label{padding:0 12px 12px}.sidebar nav{display:grid;gap:6px}.nav-link{border:0;background:transparent;color:#aab6c9;text-align:left;padding:12px;border-radius:10px;display:flex;align-items:center;gap:12px;font:600 13px 'DM Sans';cursor:pointer}.nav-link:hover{background:#1b2941;color:#fff}.nav-link.active{background:#203b3d;color:#6de0ad}.nav-icon{width:22px;text-align:center;font-size:18px}.sidebar-bottom{margin-top:auto;border-top:1px solid #26334a;padding:18px 10px 0;font-size:11px;color:#aab6c9}.sidebar-bottom small{display:block;color:#74839b;margin:7px 0 0 15px;font-size:10px}.online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#35cf8b;margin-right:7px}.main-area{margin-left:250px;width:calc(100% - 250px);min-width:0}.topbar{height:91px;background:#fff;border-bottom:1px solid #e9edf4;display:flex;align-items:center;justify-content:space-between;padding:0 36px;position:sticky;top:0;z-index:4}.topbar h1{font:800 21px 'Plus Jakarta Sans';margin:5px 0 0;color:#18243a}.eyebrow{color:#93a0b3;font-size:9px}.topbar-right{display:flex;align-items:center;gap:17px}.today-chip{font-size:11px;color:#64748b;background:#f2f8f5;padding:8px 12px;border-radius:20px}.today-chip span{color:#20b879;margin-right:5px}.avatar{width:34px;height:34px;background:#e6f6ef;color:#149966;border-radius:50%;display:grid;place-items:center;font-weight:800}.content{max-width:1440px;margin:0 auto;padding:30px 36px 18px}.section-heading{display:flex;justify-content:space-between;align-items:end;margin:0 0 22px}.section-heading h2{font:800 20px 'Plus Jakarta Sans';margin:0 0 5px}.section-heading p,.panel-head p{font-size:12px;color:#8a96a8;margin:0}.date-label{font-size:11px;color:#7c899d}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:20px}.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.stat-card{background:#fff;border:1px solid #e9edf4;border-radius:14px;padding:18px;min-width:0;box-shadow:0 2px 7px #14213b05}.stat-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:800;font-size:16px;margin-bottom:13px}.stat-icon.green{background:#e7f8f0;color:#17a66d}.stat-icon.red{background:#fff0ef;color:#e25b56}.stat-icon.blue{background:#eaf2ff;color:#4c7de1}.stat-icon.purple{background:#f2edff;color:#8a69d5}.stat-icon.pink{background:#fff0f6;color:#d94e93}.stat-icon.orange{background:#fff3e8;color:#d98835}.stat-label{font-size:11px;color:#8290a3;font-weight:600}.stat-value{font:800 23px 'Plus Jakarta Sans';color:#17243b;margin:5px 0}.stat-hint{font-size:10px;color:#9aa5b5}.panel{background:#fff;border:1px solid #e8edf4;border-radius:14px;margin-bottom:19px;padding:20px;box-shadow:0 2px 7px #14213b05;min-width:0}.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px}.panel-head h3{font:700 14px 'Plus Jakarta Sans';margin:0 0 5px}.count-pill{font-size:10px;background:#f1f5f9;color:#66758b;padding:6px 10px;border-radius:20px}.filter-bar{display:flex;align-items:end;gap:14px;flex-wrap:wrap;background:#fff;border:1px solid #e8edf4;border-radius:13px;padding:15px;margin-bottom:17px}.filter-bar label,.entry-form label{display:grid;gap:7px;color:#738096;font-size:10px;font-weight:700;min-width:160px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:38px;border:1px solid #e0e6ee;border-radius:8px;background:#fff;padding:0 10px;color:#25324a;font:500 12px 'DM Sans';outline:none}.filter-bar select:focus,.filter-bar input:focus,.entry-form input:focus,.entry-form select:focus{border-color:#32b982;box-shadow:0 0 0 3px #32b98218}.table-wrap{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;white-space:nowrap;text-align:left}th{font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:#1e293b;background:#f8fafc;padding:14px 12px;font-weight:900}td{font-size:14px;color:#1e293b;padding:14px 12px;border-bottom:1px solid #f0f2f6;font-weight:700}tbody tr:last-child td{border-bottom:0}td strong{color:#0f172a;font-size:14px;font-weight:800}.right{text-align:right}.cell-sub{display:block;font-size:11px;color:#475569;margin-top:3px;font-weight:600}.status{display:inline-flex;padding:4px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:capitalize}.status.good{background:#e8f8f0;color:#159b65}.status.bad{background:#fff0ef;color:#d85853}.status.pending{background:#fff7e8;color:#bb842b}.empty-cell{text-align:center;color:#9aa5b5;padding:28px}.entry-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:2px 0 18px}.entry-form label{flex:1}.entry-form .note-field{flex:2;min-width:190px}.rider-entry-form label{min-width:145px}.primary-btn{height:42px;padding:0 20px;background:#17a873;border:0;border-radius:8px;color:#fff;font:800 13px 'DM Sans';cursor:pointer;white-space:nowrap}.primary-btn:hover{background:#108d60}.primary-btn:disabled{opacity:.6;cursor:wait}.delete-btn{border:0;background:#fff1f0;color:#d35b54;border-radius:6px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer}.tabs{display:flex;gap:6px;border-bottom:1px solid #edf0f5;margin:-2px 0 15px}.tabs button{background:none;border:0;padding:10px 17px;color:#8995a6;font:700 12px 'DM Sans';cursor:pointer;border-bottom:2px solid transparent}.tabs button.selected{color:#159b68;border-color:#20b77a}.compact{border:0;padding:0;margin:0 0 15px}.list-heading{margin-top:20px}.footer{text-align:center;color:#a4adbb;font-size:10px;padding:14px 20px 24px}.loading-line{height:3px;background:#e7f5ee;color:#258d65;font-size:10px;padding-left:36px}.loading-line span{display:block;height:3px;width:35%;background:#22b77b;animation:load 1.5s infinite}@keyframes load{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}.alert{margin:18px 36px 0;padding:12px 14px;border-radius:9px;font-size:11px}.error-alert{background:#fff0ef;color:#b94c47}.toast{position:fixed;right:24px;bottom:24px;z-index:20;background:#14243a;color:white;border-radius:10px;padding:13px 17px;box-shadow:0 12px 35px #14213b30;font-size:12px;display:flex;gap:9px;align-items:center;max-width:min(440px,calc(100vw - 32px));animation:pop .2s ease}.toast.success span{color:#56dfa1}.toast.error span{color:#ff8880}@keyframes pop{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}.saving-overlay{position:fixed;inset:0;background:#0e1a2b70;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;gap:12px;font-size:12px}.loader{width:31px;height:31px;border:3px solid #d9eee5;border-top-color:#18a873;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.boot-screen{min-height:100vh;display:grid;place-content:center;justify-items:center;gap:12px;background:#f5f7fb;color:#66758b;font:12px 'DM Sans'}.error-panel{max-width:480px;background:#fff;padding:25px;border:1px solid #f1cecb;border-radius:12px;color:#a74440}.error-panel h2{font-size:17px}.error-panel p{font-size:12px;line-height:1.6}
+*{box-sizing:border-box}body{margin:0}.app-shell{min-height:100vh;display:flex;background:#f5f7fb}.sidebar{width:250px;background:#111b2e;color:#d5deed;min-height:100vh;padding:27px 17px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:5}.brand{display:flex;align-items:center;gap:11px;padding:0 10px 37px}.brand-mark{width:39px;height:39px;border-radius:13px;background:linear-gradient(145deg,#35c98b,#16a875);display:grid;place-items:center;color:white;font-weight:800;font-size:22px}.brand strong{display:block;color:#fff;font:800 18px 'Plus Jakarta Sans'}.brand small{display:block;color:#8190a8;font-size:9px;letter-spacing:1.4px;margin-top:3px}.side-label,.eyebrow{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#8290a8}.side-label{padding:0 12px 12px}.sidebar nav{display:grid;gap:6px}.nav-link{border:0;background:transparent;color:#aab6c9;text-align:left;padding:12px;border-radius:10px;display:flex;align-items:center;gap:12px;font:600 13px 'DM Sans';cursor:pointer}.nav-link:hover{background:#1b2941;color:#fff}.nav-link.active{background:#203b3d;color:#6de0ad}.nav-icon{width:22px;text-align:center;font-size:18px}.sidebar-bottom{margin-top:auto;border-top:1px solid #26334a;padding:18px 10px 0;font-size:11px;color:#aab6c9}.sidebar-bottom small{display:block;color:#74839b;margin:7px 0 0 15px;font-size:10px}.online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#35cf8b;margin-right:7px}.main-area{margin-left:250px;width:calc(100% - 250px);min-width:0}.topbar{height:91px;background:#fff;border-bottom:1px solid #e9edf4;display:flex;align-items:center;justify-content:space-between;padding:0 36px;position:sticky;top:0;z-index:4}.topbar h1{font:800 21px 'Plus Jakarta Sans';margin:5px 0 0;color:#18243a}.eyebrow{color:#93a0b3;font-size:9px}.topbar-right{display:flex;align-items:center;gap:12px}.refresh-btn{background:#e2e8f0;color:#1e293b;padding:0 14px;height:34px;font-size:11px;border-radius:17px}.refresh-btn:hover{background:#cbd5e1}.today-chip{font-size:11px;color:#64748b;background:#f2f8f5;padding:8px 12px;border-radius:20px}.today-chip span{color:#20b879;margin-right:5px}.avatar{width:34px;height:34px;background:#e6f6ef;color:#149966;border-radius:50%;display:grid;place-items:center;font-weight:800}.content{max-width:1440px;margin:0 auto;padding:30px 36px 18px}.section-heading{display:flex;justify-content:space-between;align-items:end;margin:0 0 22px}.section-heading h2{font:800 20px 'Plus Jakarta Sans';margin:0 0 5px}.section-heading p,.panel-head p{font-size:12px;color:#8a96a8;margin:0}.date-label{font-size:11px;color:#7c899d}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:20px}.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.stat-card{background:#fff;border:1px solid #e9edf4;border-radius:14px;padding:18px;min-width:0;box-shadow:0 2px 7px #14213b05}.stat-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:800;font-size:16px;margin-bottom:13px}.stat-icon.green{background:#e7f8f0;color:#17a66d}.stat-icon.red{background:#fff0ef;color:#e25b56}.stat-icon.blue{background:#eaf2ff;color:#4c7de1}.stat-icon.purple{background:#f2edff;color:#8a69d5}.stat-icon.pink{background:#fff0f6;color:#d94e93}.stat-icon.orange{background:#fff3e8;color:#d98835}.stat-label{font-size:11px;color:#8290a3;font-weight:600}.stat-value{font:800 23px 'Plus Jakarta Sans';color:#17243b;margin:5px 0}.stat-hint{font-size:10px;color:#9aa5b5}.panel{background:#fff;border:1px solid #e8edf4;border-radius:14px;margin-bottom:19px;padding:20px;box-shadow:0 2px 7px #14213b05;min-width:0}.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px}.panel-head h3{font:700 14px 'Plus Jakarta Sans';margin:0 0 5px}.count-pill{font-size:10px;background:#f1f5f9;color:#66758b;padding:6px 10px;border-radius:20px}.filter-bar{display:flex;align-items:end;gap:14px;flex-wrap:wrap;background:#fff;border:1px solid #e8edf4;border-radius:13px;padding:15px;margin-bottom:17px}.filter-bar label,.entry-form label{display:grid;gap:7px;color:#738096;font-size:10px;font-weight:700;min-width:160px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:38px;border:1px solid #e0e6ee;border-radius:8px;background:#fff;padding:0 10px;color:#25324a;font:500 12px 'DM Sans';outline:none}.filter-bar select:focus,.filter-bar input:focus,.entry-form input:focus,.entry-form select:focus{border-color:#32b982;box-shadow:0 0 0 3px #32b98218}.table-wrap{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;white-space:nowrap;text-align:left}th{font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:#1e293b;background:#f8fafc;padding:14px 12px;font-weight:900}td{font-size:14px;color:#1e293b;padding:14px 12px;border-bottom:1px solid #f0f2f6;font-weight:700}tbody tr:last-child td{border-bottom:0}td strong{color:#0f172a;font-size:14px;font-weight:800}.right{text-align:right}.cell-sub{display:block;font-size:11px;color:#475569;margin-top:3px;font-weight:600}.status{display:inline-flex;padding:4px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:capitalize}.status.good{background:#e8f8f0;color:#159b65}.status.bad{background:#fff0ef;color:#d85853}.status.pending{background:#fff7e8;color:#bb842b}.empty-cell{text-align:center;color:#9aa5b5;padding:28px}.entry-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:2px 0 18px}.entry-form label{flex:1}.entry-form .note-field{flex:2;min-width:190px}.rider-entry-form label{min-width:145px}.primary-btn{height:42px;padding:0 20px;background:#17a873;border:0;border-radius:8px;color:#fff;font:800 13px 'DM Sans';cursor:pointer;white-space:nowrap}.primary-btn:hover{background:#108d60}.primary-btn:disabled{opacity:.6;cursor:wait}.delete-btn{border:0;background:#fff1f0;color:#d35b54;border-radius:6px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer}.tabs{display:flex;gap:6px;border-bottom:1px solid #edf0f5;margin:-2px 0 15px}.tabs button{background:none;border:0;padding:10px 17px;color:#8995a6;font:700 12px 'DM Sans';cursor:pointer;border-bottom:2px solid transparent}.tabs button.selected{color:#159b68;border-color:#20b77a}.compact{border:0;padding:0;margin:0 0 15px}.list-heading{margin-top:20px}.footer{text-align:center;color:#a4adbb;font-size:10px;padding:14px 20px 24px}.loading-line{height:3px;background:#e7f5ee;color:#258d65;font-size:10px;padding-left:36px}.loading-line span{display:block;height:3px;width:35%;background:#22b77b;animation:load 1.5s infinite}@keyframes load{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}.alert{margin:18px 36px 0;padding:12px 14px;border-radius:9px;font-size:11px}.error-alert{background:#fff0ef;color:#b94c47}.toast{position:fixed;right:24px;bottom:24px;z-index:20;background:#14243a;color:white;border-radius:10px;padding:13px 17px;box-shadow:0 12px 35px #14213b30;font-size:12px;display:flex;gap:9px;align-items:center;max-width:min(440px,calc(100vw - 32px));animation:pop .2s ease}.toast.success span{color:#56dfa1}.toast.error span{color:#ff8880}@keyframes pop{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}.saving-overlay{position:fixed;inset:0;background:#0e1a2b70;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;gap:12px;font-size:12px}.loader{width:31px;height:31px;border:3px solid #d9eee5;border-top-color:#18a873;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.boot-screen{min-height:100vh;display:grid;place-content:center;justify-items:center;gap:12px;background:#f5f7fb;color:#66758b;font:12px 'DM Sans'}.error-panel{max-width:480px;background:#fff;padding:25px;border:1px solid #f1cecb;border-radius:12px;color:#a74440}.error-panel h2{font-size:17px}.error-panel p{font-size:12px;line-height:1.6}
 .login-page{min-height:100vh;position:relative;isolation:isolate;overflow:hidden;display:grid;place-items:center;padding:32px 18px;background:radial-gradient(ellipse at 15% 10%,#e1f8ed 0,transparent 34%),radial-gradient(ellipse at 90% 90%,#e6edff 0,transparent 36%),linear-gradient(135deg,#f8fbff 0%,#f1f6f8 48%,#f8faff 100%);font-family:'DM Sans',sans-serif;color:#17243b}
 .login-glow{position:absolute;z-index:-1;border-radius:50%;filter:blur(2px);pointer-events:none}.login-glow-one{width:330px;height:330px;left:-130px;top:18%;background:#b8f0d7;opacity:.32}.login-glow-two{width:390px;height:390px;right:-150px;bottom:4%;background:#c8d8ff;opacity:.32}
 .login-card{width:min(100%,460px);padding:48px 44px 36px;border:1px solid #e7edf2;border-radius:25px;background:rgba(255,255,255,.92);box-shadow:0 24px 70px rgba(28,48,75,.11),0 3px 10px rgba(28,48,75,.04);text-align:center;backdrop-filter:blur(14px)}
@@ -1326,7 +2515,7 @@ const styles = `
 .off-btn { background: #e25b56; }
 .off-btn:hover { background: #c54843; }
 .selection-controls { display: flex; align-items: center; gap: 12px; margin-bottom: 15px; }
-.text-btn { background: none; border: 0; color: #18a873; font-weight: 700; font-size: 12px; cursor: pointer; padding: 0; }
+.text-btn { background: none; border: 0; color: #17a873; font-weight: 700; font-size: 12px; cursor: pointer; padding: 0; }
 .text-btn:hover { text-decoration: underline; }
 .multi-select-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 250px; overflow-y: auto; padding: 4px; border: 1px solid #e9edf4; border-radius: 8px; background: #fff; }
 .restaurant-checkbox-card { display: flex; flex-direction: column; gap: 3px; padding: 10px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer; background: #fdfdfd; transition: all 0.15s ease; }
@@ -1334,8 +2523,71 @@ const styles = `
 .restaurant-checkbox-card.selected { border-color: #17a873; background: #f0fdf4; box-shadow: 0 0 0 1px #17a873; }
 .restaurant-checkbox-card span { font-weight: 800; font-size: 14px; color: #0f172a; }
 
-/* Print Styles: Hide UI controls when printing/downloading */
+/* Universal Box Card View - Fully Responsive & Non-overflowing */
+.universal-card-list table, .universal-card-list thead, .universal-card-list tbody, .universal-card-list th, .universal-card-list td, .universal-card-list tr {
+  display: block;
+  width: 100%;
+}
+.universal-card-list thead tr {
+  position: absolute;
+  top: -9999px;
+  left: -9999px;
+}
+.universal-card-list tr {
+  background: #ffffff;
+  border: 2px solid var(--card-border-color, #3b82f6);
+  border-radius: 14px;
+  margin-bottom: 16px;
+  padding: 16px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.05);
+}
+.universal-card-list td {
+  border: none;
+  position: relative;
+  padding: 8px 0;
+  text-align: left;
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  border-bottom: 1px solid #f1f5f9;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.universal-card-list td:last-child {
+  border-bottom: none;
+}
+.universal-card-list td::before {
+  content: attr(data-label);
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #64748b;
+  font-size: 11px;
+  margin-bottom: 3px;
+  letter-spacing: 0.5px;
+}
+.universal-card-list td.right {
+  text-align: left;
+}
+.card-value-block {
+  width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Orders Grid in Stats Header */
+.orders-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 15px;
+}
+
+/* Print Styles: Hide browser default headers/footers and show custom watermark & brand */
 @media print {
+  @page {
+    size: auto;
+    margin: 10mm;
+  }
   .print-hide, .sidebar, .topbar, .footer {
     display: none !important;
   }
@@ -1353,20 +2605,39 @@ const styles = `
     box-shadow: none !important;
     padding: 0 !important;
     margin-bottom: 20px !important;
+    background: transparent !important;
+  }
+  .printable-report-area, .history-print-box {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 20px !important;
+    margin: 0 !important;
+    border: none !important;
+    position: relative !important;
+    background: #fff !important;
+  }
+  .pdf-watermark-logo {
+    display: block !important;
+  }
+  table {
+    width: 100% !important;
+    overflow: visible !important;
+  }
+  table th {
+    font-size: 13px !important;
+    font-weight: 900 !important;
+    color: #000 !important;
+    background: #f1f5f9 !important;
+    padding: 10px !important;
+  }
+  table td {
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    color: #000 !important;
+    padding: 10px !important;
   }
   .print-only-header {
     display: block !important;
-  }
-  table th {
-    font-size: 15px !important;
-    font-weight: 900 !important;
-    color: #000 !important;
-    background: #e2e8f0 !important;
-  }
-  table td {
-    font-size: 15px !important;
-    font-weight: 800 !important;
-    color: #000 !important;
   }
 }
 
