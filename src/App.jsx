@@ -105,18 +105,15 @@ const getOrderRestaurants = (items = []) => {
   return uniqueNames.length > 0 ? uniqueNames.join(", ") : "—";
 };
 
-// Foodish Logo Component[cite: 5]
 const FoodishLogo = ({ size = 28 }) => (
   <svg width={size} height={size} viewBox="0 0 500 500" style={{ display: "inline-block", verticalAlign: "middle" }}>
     <circle cx="250" cy="250" r="230" fill="#dc2626" />
     <circle cx="250" cy="250" r="190" fill="none" stroke="#ffffff" strokeWidth="24" />
-    {/* Fork Left */}
     <path d="M162 160 v180 h20 v-180 z" fill="#ffffff" />
     <path d="M202 160 v180 h20 v-180 z" fill="#ffffff" />
     <path d="M242 160 v180 h20 v-180 z" fill="#ffffff" />
     <path d="M162 230 h100 v20 h-100 z" fill="#ffffff" />
     <path d="M162 340 h100 v30 c0 30 -100 30 -100 0 z" fill="#ffffff" />
-    {/* Spoon Right */}
     <ellipse cx="360" cy="230" rx="45" ry="60" fill="#ffffff" />
     <path d="M345 280 h30 v110 h-30 z" fill="#ffffff" />
   </svg>
@@ -133,6 +130,9 @@ function App() {
 
   const [orders, setOrders] = useState([]);
   const [restaurants, setRestaurants] = useState([]);
+  const [chargeRestaurantId, setChargeRestaurantId] = useState("");
+  const [hiddenChargeInput, setHiddenChargeInput] = useState("0");
+  const [chargeSearch, setChargeSearch] = useState("");
   const [riders, setRiders] = useState([]);
   const [managementEntries, setManagementEntries] = useState([]);
   const [onlineEntries, setOnlineEntries] = useState([]);
@@ -326,6 +326,53 @@ function App() {
 
   const selectedRestaurant =
     restaurants.find((item) => item.id === restaurantId) || restaurants[0];
+  const selectedChargeRestaurant =
+    restaurants.find((item) => item.id === chargeRestaurantId) || restaurants[0];
+
+  useEffect(() => {
+    if (!chargeRestaurantId && restaurants.length) {
+      setChargeRestaurantId(restaurants[0].id);
+    }
+  }, [restaurants, chargeRestaurantId]);
+
+  useEffect(() => {
+    if (selectedChargeRestaurant) {
+      const current = Number(selectedChargeRestaurant.hiddenDeliveryCharge ?? 0);
+      setHiddenChargeInput(Number.isFinite(current) && current >= 0 ? String(current) : "0");
+    }
+  }, [chargeRestaurantId, restaurants]);
+
+  async function saveHiddenDeliveryCharge(event) {
+    event.preventDefault();
+    if (!chargeRestaurantId) {
+      setNotice({ type: "error", text: "Please select a restaurant first." });
+      return;
+    }
+    const amount = Number(hiddenChargeInput);
+    if (!Number.isFinite(amount) || amount < 0) {
+      setNotice({ type: "error", text: "Enter a valid charge amount (0 or greater)." });
+      return;
+    }
+    setSaving(true);
+    try {
+      // mini_restaurants collection-e hiddenDeliveryCharge update kora hocche
+      await updateDoc(doc(db, COLLECTIONS.restaurants, chargeRestaurantId), {
+        hiddenDeliveryCharge: amount,
+        hiddenDeliveryChargeUpdatedAt: serverTimestamp(),
+      });
+      setRestaurants((current) => current.map((item) =>
+        item.id === chargeRestaurantId
+          ? { ...item, hiddenDeliveryCharge: amount }
+          : item
+      ));
+      setNotice({ type: "success", text: `Hidden delivery charge updated for ${selectedChargeRestaurant?.name || "the selected restaurant"}.` });
+    } catch (error) {
+      setNotice({ type: "error", text: `Could not save charge: ${error.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const selectedRider = riders.find((item) => item.id === riderId) || riders[0];
 
   useEffect(() => {
@@ -605,14 +652,6 @@ function App() {
     document.body.removeChild(link);
   };
 
-  const downloadSavedReportPDF = (report) => {
-    setActivePaperworkPrintReport(report);
-    setTimeout(() => {
-      window.print();
-    }, 200);
-  };
-
-  // Overview Date-wise Orders & Stats Calculation
   const overviewOrdersOnDate = useMemo(
     () => orders.filter((order) => dateKey(order.createdAt) === overviewDate),
     [orders, overviewDate]
@@ -650,7 +689,6 @@ function App() {
     .filter(isCOD)
     .reduce((sum, order) => sum + orderAmount(order), 0);
 
-  // Restaurant Page Orders with Search
   const restaurantPageOrders = useMemo(() => {
     if (!selectedRestaurant) return [];
     return orders.filter((order) => {
@@ -701,7 +739,6 @@ function App() {
     return { deliveredTotal: deliveredSum, pendingTotal: pendingSum, cancelledTotal: cancelledSum };
   }, [orders, selectedRestaurant, resPageDate]);
 
-  // Rider Page Orders with Search
   const riderPageOrders = useMemo(() => {
     if (!selectedRider) return [];
     return orders.filter((order) => {
@@ -778,7 +815,6 @@ function App() {
     )
     .sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
 
-  // History & Reports - Restaurant Table data generation for date range
   const historyRestaurantRows = useMemo(() => {
     if (!historyStart || !historyEnd || !restaurantId) return [];
     const rowsMap = new Map();
@@ -826,7 +862,6 @@ function App() {
     );
   }, [historyRestaurantRows]);
 
-  // History & Reports - Rider Table data generation for date range
   const historyRiderRows = useMemo(() => {
     if (!historyStart || !historyEnd || !riderId) return [];
     const rowsMap = new Map();
@@ -1023,6 +1058,7 @@ function App() {
   const navItems = [
     ["overview", "Overview", "◫"],
     ["restaurants", "Restaurants", "▤"],
+    ["delivery-charge", "Delivery Charge", "৳"],
     ["riders", "Riders", "♧"],
     ["online", "Online Accounts", "৳"],
     ["history", "History & Reports", "▦"],
@@ -1146,7 +1182,6 @@ function App() {
               <span className="date-label">{new Date().toLocaleDateString("en-BD", { dateStyle: "full" })}</span>
             </div>
 
-            {/* Overview Filter Bar at the Top with Order Status Filter */}
             <div className="panel" style={{ padding: "16px", marginBottom: "20px" }}>
               <div className="filter-bar" style={{ margin: 0, border: 0, padding: 0 }}>
                 <label>
@@ -1175,7 +1210,6 @@ function App() {
               </div>
             </div>
 
-            {/* Overview Stats Cards (Date-wise) */}
             <div className="stats-grid orders-card-grid">
               <StatCard label="Delivered total" value={money(deliveredTotalOverview)} hint={`${deliveredOverview.length} delivered orders`} icon="↗" tone="green" />
               <StatCard label="Cancelled total" value={money(cancelledTotalOverview)} hint={`${cancelledOverview.length} cancelled orders`} icon="×" tone="red" />
@@ -1258,7 +1292,6 @@ function App() {
           </section>
         )}
 
-        {/* Paper Work Page with Professional Preview Layout matching History & Reports */}
         {page === "paperwork" && (
           <section className="content">
             <div className="section-heading print-hide">
@@ -1280,7 +1313,6 @@ function App() {
                 </label>
               </div>
 
-              {/* Riders Multi-Select Cards with Date-wise Bill and Sorted */}
               <div style={{ marginTop: "15px" }}>
                 <div className="panel-head">
                   <h3>Select Riders ({paperWorkRiderIds.length} selected)</h3>
@@ -1311,7 +1343,6 @@ function App() {
               </div>
             </div>
 
-            {/* Saved Reports Archive List with Permanent Snapshot & Delete Option */}
             {firestorePaperReports.length > 0 && (
               <div className="panel print-hide">
                 <div className="panel-head">
@@ -1355,15 +1386,11 @@ function App() {
               </div>
             )}
 
-            {/* Professional PDF Preview Area matching History & Reports */}
             <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
-
-              {/* PDF Watermark Logo Center */}
               <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
                 <FoodishLogo size={360} />
               </div>
 
-              {/* PDF Header with FOODISH Branding & Logo */}
               <div className="print-header" style={{ textAlign: "center", marginBottom: "30px", position: "relative", zIndex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
                   <FoodishLogo size={36} />
@@ -1424,7 +1451,7 @@ function App() {
                                 min="0"
                                 step="0.01"
                                 value={row.salary}
-                                onChange={(e) => handleUpdateSalary(row.riderId, e.target.value)}
+                                onChange={(e) => handleUpdateManagementEntry({ entityType: "rider", entityId: row.riderId, entityName: row.name, type: "salary", amount: e.target.value, date: paperWorkDate })}
                                 style={{ width: "90px", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e1", fontWeight: "700", fontSize: "13px" }}
                               />
                             )}
@@ -1455,7 +1482,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Profit Summary Box */}
               <div style={{ marginTop: "30px", padding: "25px", background: "linear-gradient(135deg, #f0fdf4 0%, #e6f6ef 100%)", border: "2px solid #bbf7d0", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
                 <div style={{ fontSize: "14px", fontWeight: "800", color: "#15803d", letterSpacing: "1px" }}>PROFIT SUMMARY</div>
                 <div style={{ fontSize: "40px", fontWeight: "900", color: "#14532d", margin: "6px 0 0" }}>
@@ -1466,7 +1492,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Signatures Section */}
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
                 <div style={{ textAlign: "center", width: "220px" }}>
                   <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
@@ -1488,7 +1513,6 @@ function App() {
           </section>
         )}
 
-        {/* Dedicated Bulk Restaurant Management Page */}
         {page === "bulk" && (
           <section className="content">
             <div className="section-heading">
@@ -1542,7 +1566,98 @@ function App() {
           </section>
         )}
 
-        {/* Restaurants Accounts & Orders Page */}
+        {/* --- FIXED DELIVERY CHARGE PAGE CONNECTED TO mini_restaurants --- */}
+        {page === "delivery-charge" && (
+          <section className="content">
+            <div className="section-heading">
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 8 }}>RESTAURANT SETTINGS / DELIVERY</div>
+                <h2>Restaurant delivery charge</h2>
+                <p>Manage an additional delivery charge for each restaurant. Changes sync to the customer checkout configuration[cite: 1].</p>
+              </div>
+              <span className="date-label">Live Firestore settings</span>
+            </div>
+
+            <div className="stats-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
+              <StatCard label="Restaurants available" value={restaurants.length} hint="Customer-facing restaurant records" icon="▤" tone="blue" />
+              <StatCard label="Charges configured" value={restaurants.filter((r) => Number(r.hiddenDeliveryCharge || 0) > 0).length} hint="Restaurants with an extra charge" icon="৳" tone="green" />
+              <StatCard label="No extra charge" value={restaurants.filter((r) => Number(r.hiddenDeliveryCharge || 0) <= 0).length} hint="Hidden delivery charge is ৳0" icon="✓" tone="purple" />
+            </div>
+
+            <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ padding: "22px 24px", background: "linear-gradient(120deg,#10243a 0%,#1d4050 58%,#176c59 100%)", color: "#fff" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 9 }}>
+                  <span style={{ width: 36, height: 36, borderRadius: 11, background: "#ffffff20", display: "grid", placeItems: "center", fontSize: 19 }}>৳</span>
+                  <span style={{ fontSize: 11, letterSpacing: 1.4, fontWeight: 800, color: "#b8d8d1" }}>PER-RESTAURANT CONFIGURATION</span>
+                </div>
+                <h3 style={{ margin: 0, font: "800 21px 'Plus Jakarta Sans'" }}>Set hidden delivery charge</h3>
+                <p style={{ margin: "7px 0 0", color: "#d0e2e0", fontSize: 12, lineHeight: 1.6 }}>Choose a restaurant and set its additional delivery amount in BDT. The value is stored directly in its `mini_restaurants` document[cite: 1].</p>
+              </div>
+
+              <form onSubmit={saveHiddenDeliveryCharge} style={{ padding: 24 }}>
+                <div className="filter-bar" style={{ border: 0, padding: 0, margin: 0, background: "transparent", alignItems: "end" }}>
+                  <label style={{ flex: "2 1 260px" }}>
+                    Select restaurant
+                    <select value={chargeRestaurantId} onChange={(e) => setChargeRestaurantId(e.target.value)} required>
+                      <option value="">Choose a restaurant</option>
+                      {restaurants.map((restaurant) => (
+                        <option key={restaurant.id} value={restaurant.id}>{restaurant.name || restaurant.restaurantName || restaurant.id}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ flex: "1 1 190px" }}>
+                    Hidden delivery charge (৳)
+                    <input type="number" min="0" step="0.01" inputMode="decimal" value={hiddenChargeInput} onChange={(e) => setHiddenChargeInput(e.target.value)} placeholder="0.00" required />
+                  </label>
+                  <button className="primary-btn" type="submit" disabled={saving || !chargeRestaurantId} style={{ minWidth: 155, height: 42 }}>
+                    {saving ? "Saving…" : "Save charge"}
+                  </button>
+                </div>
+
+                {selectedChargeRestaurant ? (
+                  <div style={{ marginTop: 22, padding: 16, border: "1px solid #e6edf2", borderRadius: 13, background: "#f8fbfa", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#8190a3", fontWeight: 800, letterSpacing: 1 }}>SELECTED RESTAURANT</div>
+                      <strong style={{ display: "block", marginTop: 5, color: "#17243b", fontSize: 15 }}>{selectedChargeRestaurant.name || selectedChargeRestaurant.restaurantName || selectedChargeRestaurant.id}</strong>
+                      <span style={{ display: "block", marginTop: 4, color: "#8794a5", fontSize: 10 }}>ID: {selectedChargeRestaurant.id}</span>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 10, color: "#8190a3", fontWeight: 800, letterSpacing: 1 }}>CURRENT SAVED CHARGE</div>
+                      <div style={{ font: "800 25px 'Plus Jakarta Sans'", color: "#139968", marginTop: 3 }}>{money(selectedChargeRestaurant.hiddenDeliveryCharge || 0)}</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 18, padding: 16, borderRadius: 11, background: "#fff8eb", color: "#9a6b22", fontSize: 12 }}>No restaurants found in the database.</div>
+                )}
+              </form>
+            </div>
+
+            <div className="panel">
+              <div className="panel-head" style={{ gap: 14, flexWrap: "wrap" }}>
+                <div><h3>Restaurant charge overview</h3><p>Current hidden delivery charge values from Firestore</p></div>
+                <input value={chargeSearch} onChange={(e) => setChargeSearch(e.target.value)} placeholder="Search restaurant…" style={{ height: 36, border: "1px solid #e0e6ee", borderRadius: 8, padding: "0 11px", minWidth: 190, font: "12px 'DM Sans'" }} />
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Restaurant</th><th>Restaurant ID</th><th className="right">Hidden delivery charge</th><th>Status</th><th>Action</th></tr></thead>
+                  <tbody>
+                    {restaurants.filter((r) => normalized(r.name || r.restaurantName || r.id).includes(normalized(chargeSearch))).map((restaurant) => (
+                      <tr key={restaurant.id}>
+                        <td><strong>{restaurant.name || restaurant.restaurantName || restaurant.id}</strong></td>
+                        <td><span className="cell-sub">{restaurant.id}</span></td>
+                        <td className="right">{money(restaurant.hiddenDeliveryCharge || 0)}</td>
+                        <td><span className={`status ${Number(restaurant.hiddenDeliveryCharge || 0) > 0 ? "good" : "pending"}`}>{Number(restaurant.hiddenDeliveryCharge || 0) > 0 ? "Configured" : "No extra charge"}</span></td>
+                        <td><button type="button" className="text-btn" onClick={() => { setChargeRestaurantId(restaurant.id); setHiddenChargeInput(String(Number(restaurant.hiddenDeliveryCharge || 0))); }} style={{ border: 0, background: "#eaf7f1", color: "#13865d", borderRadius: 7, padding: "8px 11px", fontWeight: 800, cursor: "pointer" }}>Edit charge</button></td>
+                      </tr>
+                    ))}
+                    {!restaurants.length && <tr><td colSpan="5" className="empty-cell">No restaurants found.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        )}
+
         {page === "restaurants" && (
           <section className="content">
             <div className="section-heading">
@@ -1586,14 +1701,12 @@ function App() {
               </label>
             </div>
 
-            {/* Summary Boxes: Delivered Total, Not Delivered Total, Cancelled Total */}
             <div className="stats-grid orders-card-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
               <StatCard label="Delivered Subtotal" value={money(restaurantPageStats.deliveredTotal)} hint={`Delivered orders · ${resPageDate}`} icon="✓" tone="green" />
               <StatCard label="Pending / On The Way" value={money(restaurantPageStats.pendingTotal)} hint={`Not delivered yet · ${resPageDate}`} icon="⌛" tone="orange" />
               <StatCard label="Cancelled Subtotal" value={money(restaurantPageStats.cancelledTotal)} hint={`Cancelled orders · ${resPageDate}`} icon="×" tone="red" />
             </div>
 
-            {/* Physical Cash Box with Fresh Note & Edit Buttons inside Card Header */}
             <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", marginBottom: "20px", boxShadow: "0 2px 7px rgba(20,33,59,0.03)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "15px" }}>
                 <div>
@@ -1652,7 +1765,6 @@ function App() {
               </div>
             </div>
 
-            {/* Orders Table with Rider & Product Details */}
             <div className="panel">
               <div className="panel-head">
                 <div>
@@ -1735,7 +1847,6 @@ function App() {
           </section>
         )}
 
-        {/* Riders Accounts & Orders Page */}
         {page === "riders" && (
           <section className="content">
             <div className="section-heading">
@@ -1779,17 +1890,13 @@ function App() {
               </label>
             </div>
 
-            {/* Rider Summary Boxes: Delivered, Pending, Cancelled */}
             <div className="stats-grid orders-card-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
               <StatCard label="Delivered Orders Total" value={money(riderPageStats.deliveredTotal)} hint={`Delivered orders · ${riderPageDate}`} icon="✓" tone="green" />
               <StatCard label="Pending / On The Way" value={money(riderPageStats.pendingTotal)} hint={`Not delivered yet · ${riderPageDate}`} icon="⌛" tone="orange" />
               <StatCard label="Cancelled Orders Total" value={money(riderPageStats.cancelledTotal)} hint={`Cancelled orders · ${riderPageDate}`} icon="×" tone="red" />
             </div>
 
-            {/* Rider Management Boxes (COD Collection, Fine, Salary) with Note & Edit buttons strictly at the Bottom */}
             <div className="stats-grid orders-card-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
-
-              {/* COD Box */}
               <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", margin: 0, boxShadow: "0 2px 7px rgba(20,33,59,0.03)", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: "150px" }}>
                 <div>
                   <span style={{ fontSize: "11px", fontWeight: "800", color: "#64748b", letterSpacing: "0.5px" }}>COD COLLECTION</span>
@@ -1840,7 +1947,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Fine Box */}
               <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", margin: 0, boxShadow: "0 2px 7px rgba(20,33,59,0.03)", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: "150px" }}>
                 <div>
                   <span style={{ fontSize: "11px", fontWeight: "800", color: "#64748b", letterSpacing: "0.5px" }}>FINE AMOUNT</span>
@@ -1891,7 +1997,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Salary Box */}
               <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", margin: 0, boxShadow: "0 2px 7px rgba(20,33,59,0.03)", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: "150px" }}>
                 <div>
                   <span style={{ fontSize: "11px", fontWeight: "800", color: "#64748b", letterSpacing: "0.5px" }}>DAILY SALARY</span>
@@ -1941,10 +2046,8 @@ function App() {
                   </button>
                 </div>
               </div>
-
             </div>
 
-            {/* Rider Orders Table with Product Details */}
             <div className="panel">
               <div className="panel-head">
                 <div>
@@ -2043,7 +2146,6 @@ function App() {
               </form>
               <div className="panel-head list-heading"><div><h3>{onlineMethod} entries</h3><p>{selectedDate}</p></div><span className="count-pill">{filteredOnline.length} entries</span></div>
 
-              {/* Online Accounts Entries as 3 Boxes per Row */}
               <div className="online-boxes-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "15px", marginTop: "20px" }}>
                 {filteredOnline.map((entry, idx) => {
                   const colors = ["#ec4899", "#f59e0b", "#3b82f6", "#10b981", "#8b5cf6"];
@@ -2108,7 +2210,6 @@ function App() {
               </div>
             </div>
 
-            {/* Saved Archive Reports List */}
             {savedEntityReports.filter(r => r.type === historyType).length > 0 && (
               <div className="panel print-hide">
                 <div className="panel-head"><div><h3>Saved {historyType === "restaurant" ? "Restaurant" : (historyType === "rider" ? "Rider" : "Online")} Reports Archive</h3><p>View or delete previously saved permanent reports</p></div></div>
@@ -2144,16 +2245,12 @@ function App() {
               </div>
             )}
 
-            {/* Restaurant Specific Report View (Printable / Active View with Watermark) */}
             {historyType === "restaurant" && (
               <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
-
-                {/* PDF Watermark Logo Center */}
                 <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
                   <FoodishLogo size={360} />
                 </div>
 
-                {/* PDF Header with FOODISH Branding & Logo */}
                 <div className="print-header" style={{ textAlign: "center", marginBottom: "30px", position: "relative", zIndex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
                     <FoodishLogo size={36} />
@@ -2198,7 +2295,6 @@ function App() {
                   </div>
                 </div>
 
-                {/* Big Physical Count Total */}
                 <div style={{ marginTop: "30px", padding: "20px", background: "#f8fafc", border: "2px dashed #cbd5e1", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
                   <div style={{ fontSize: "14px", fontWeight: "800", color: "#64748b", letterSpacing: "1px" }}>PHYSICAL COUNT TOTAL</div>
                   <div style={{ fontSize: "40px", fontWeight: "900", color: "#0f172a", margin: "6px 0 0" }}>
@@ -2206,7 +2302,6 @@ function App() {
                   </div>
                 </div>
 
-                {/* Signatures Section */}
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
                   <div style={{ textAlign: "center", width: "220px" }}>
                     <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
@@ -2227,16 +2322,12 @@ function App() {
               </div>
             )}
 
-            {/* Rider Specific Report View with Net Salary Calculation & Signatures */}
             {historyType === "rider" && (
               <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
-
-                {/* PDF Watermark Logo Center */}
                 <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
                   <FoodishLogo size={360} />
                 </div>
 
-                {/* PDF Header with FOODISH Branding & Logo */}
                 <div className="print-header" style={{ textAlign: "center", marginBottom: "30px", position: "relative", zIndex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
                     <FoodishLogo size={36} />
@@ -2290,7 +2381,6 @@ function App() {
                   </div>
                 </div>
 
-                {/* Big Net Salary Calculation Box (Salary = Total Salary - Fine) */}
                 <div style={{ marginTop: "30px", padding: "20px", background: "#f0fdf4", border: "2px solid #bbf7d0", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
                   <div style={{ fontSize: "14px", fontWeight: "800", color: "#15803d", letterSpacing: "1px" }}>NET SALARY (TOTAL SALARY - FINE)</div>
                   <div style={{ fontSize: "40px", fontWeight: "900", color: "#14532d", margin: "6px 0 0" }}>
@@ -2301,7 +2391,6 @@ function App() {
                   </div>
                 </div>
 
-                {/* Signatures Section */}
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
                   <div style={{ textAlign: "center", width: "220px" }}>
                     <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
@@ -2337,7 +2426,6 @@ function App() {
         <footer className="footer print-hide">Foodish Accounts · Firebase Firestore · Built for internal operations</footer>
       </main>
 
-      {/* Note Modal Popup */}
       {noteModalEntry && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 50, display: "grid", placeItems: "center", padding: "16px" }}>
           <div style={{ background: "#fff", padding: "24px", borderRadius: "16px", width: "100%", maxWidth: "400px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }}>
@@ -2382,7 +2470,6 @@ function App() {
         </div>
       )}
 
-      {/* Beautiful Center Modal Popup for Edit Amount */}
       {editModalData && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 60, display: "grid", placeItems: "center", padding: "16px", backdropFilter: "blur(2px)" }}>
           <div style={{ background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "420px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)" }}>
@@ -2435,7 +2522,6 @@ function App() {
         </div>
       )}
 
-      {/* Beautiful Center Modal Popup for Delete Confirmation */}
       {deleteModalData && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 60, display: "grid", placeItems: "center", padding: "16px", backdropFilter: "blur(2px)" }}>
           <div style={{ background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "400px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)", textAlign: "center" }}>
