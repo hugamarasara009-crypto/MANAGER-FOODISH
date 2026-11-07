@@ -355,7 +355,6 @@ function App() {
     }
     setSaving(true);
     try {
-      // mini_restaurants collection-e hiddenDeliveryCharge update kora hocche
       await updateDoc(doc(db, COLLECTIONS.restaurants, chargeRestaurantId), {
         hiddenDeliveryCharge: amount,
         hiddenDeliveryChargeUpdatedAt: serverTimestamp(),
