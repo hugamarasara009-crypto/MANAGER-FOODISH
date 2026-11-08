@@ -1,312 +1,282 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { auth, db } from "./firebase";
 import {
-  onAuthStateChanged,
-  GoogleAuthProvider,
-  signInWithPopup,
-  signOut,
+onAuthStateChanged,
+GoogleAuthProvider,
+signInWithPopup,
+signOut,
 } from "firebase/auth";
 import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  onSnapshot,
-  query,
-  serverTimestamp,
-  updateDoc,
-  getDocs,
-  where,
-  limit,
+addDoc,
+collection,
+deleteDoc,
+doc,
+onSnapshot,
+query,
+serverTimestamp,
+updateDoc,
+getDocs,
+where,
+limit,
 } from "firebase/firestore";
-
 const COLLECTIONS = {
-  orders: "orders",
-  restaurants: "mini_restaurants",
-  riders: "riders",
-  admins: "admins",
-  management: "management_entries",
-  online: "online_entries",
-  locations: "locations",
-  paperworkReports: "paperwork_reports",
+orders: "orders",
+restaurants: "mini_restaurants",
+riders: "riders",
+admins: "admins",
+management: "management_entries",
+online: "online_entries",
+locations: "locations",
+paperworkReports: "paperwork_reports",
 };
-
 const money = (value) =>
-  `৳${Number(value || 0).toLocaleString("en-BD", {
-    maximumFractionDigits: 2,
-  })}`;
-
+`৳${Number(value || 0).toLocaleString("en-BD", { maximumFractionDigits: 2, })}`;
 const asDate = (value) => {
-  if (!value) return null;
-  if (typeof value?.toDate === "function") return value.toDate();
-  if (value instanceof Date) return value;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
+if (!value) return null;
+if (typeof value?.toDate === "function") return value.toDate();
+if (value instanceof Date) return value;
+const date = new Date(value);
+return Number.isNaN(date.getTime()) ? null : date;
 };
-
 const dateKey = (value) => {
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  const date = asDate(value);
-  if (!date) return "";
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+const date = asDate(value);
+if (!date) return "";
+const y = date.getFullYear();
+const m = String(date.getMonth() + 1).padStart(2, "0");
+const d = String(date.getDate()).padStart(2, "0");
+return `${y}-${m}-${d}`;
 };
-
 const todayKey = () => dateKey(new Date());
 const formatDateTime = (value) => {
-  const date = asDate(value);
-  return date
-    ? date.toLocaleString("en-BD", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "—";
+const date = asDate(value);
+return date
+? date.toLocaleString("en-BD", {
+day: "2-digit",
+month: "short",
+year: "numeric",
+hour: "2-digit",
+minute: "2-digit",
+})
+: "—";
 };
-
 const normalized = (value) => String(value || "").trim().toLowerCase();
 const isDelivered = (order) =>
-  ["delivered", "complete", "completed", "success"].includes(
-    normalized(order.orderStatus)
-  );
+["delivered", "complete", "completed", "success"].includes(
+normalized(order.orderStatus)
+);
 const isCancelled = (order) =>
-  ["cancelled", "canceled", "rejected"].includes(normalized(order.orderStatus));
+["cancelled", "canceled", "rejected"].includes(normalized(order.orderStatus));
 const isCOD = (order) => {
-  const payment = normalized(order.payment || order.paymentMethod);
-  return payment === "cod" || payment.includes("cash on delivery");
+const payment = normalized(order.payment || order.paymentMethod);
+return payment === "cod" || payment.includes("cash on delivery");
 };
 const orderAmount = (order) => Number(order.totalPrice || 0);
-
 const itemSubtotal = (items = [], restaurantName = "", restaurantId = "") => {
-  if (!Array.isArray(items)) return 0;
-  return items.reduce((sum, item) => {
-    const itemRestaurant = normalized(item.miniResName || item.restaurantName);
-    const itemResId = String(item.miniResId || item.restaurantId || "");
-    const matchesName = restaurantName && itemRestaurant === normalized(restaurantName);
-    const matchesId = restaurantId && itemResId === String(restaurantId);
-
+if (!Array.isArray(items)) return 0;
+return items.reduce((sum, item) => {
+const itemRestaurant = normalized(item.miniResName || item.restaurantName);
+const itemResId = String(item.miniResId || item.restaurantId || "");
+const matchesName = restaurantName && itemRestaurant === normalized(restaurantName);
+const matchesId = restaurantId && itemResId === String(restaurantId);
     if (restaurantName || restaurantId) {
       if (!matchesName && !matchesId) return sum;
     }
     return sum + Number(item.price || 0) * Number(item.quantity || 0);
-  }, 0);
+}, 0);
 };
-
 const getOrderRestaurants = (items = []) => {
-  if (!Array.isArray(items) || items.length === 0) return "—";
-  const names = items
-    .map((item) => item.miniResName || item.restaurantName || item.name)
-    .filter(Boolean);
-  const uniqueNames = Array.from(new Set(names));
-  return uniqueNames.length > 0 ? uniqueNames.join(", ") : "—";
+if (!Array.isArray(items) || items.length === 0) return "—";
+const names = items
+.map((item) => item.miniResName || item.restaurantName || item.name)
+.filter(Boolean);
+const uniqueNames = Array.from(new Set(names));
+return uniqueNames.length > 0 ? uniqueNames.join(", ") : "—";
 };
-
 const FoodishLogo = ({ size = 28 }) => (
-  <svg width={size} height={size} viewBox="0 0 500 500" style={{ display: "inline-block", verticalAlign: "middle" }}>
-    <circle cx="250" cy="250" r="230" fill="#dc2626" />
-    <circle cx="250" cy="250" r="190" fill="none" stroke="#ffffff" strokeWidth="24" />
-    <path d="M162 160 v180 h20 v-180 z" fill="#ffffff" />
-    <path d="M202 160 v180 h20 v-180 z" fill="#ffffff" />
-    <path d="M242 160 v180 h20 v-180 z" fill="#ffffff" />
-    <path d="M162 230 h100 v20 h-100 z" fill="#ffffff" />
-    <path d="M162 340 h100 v30 c0 30 -100 30 -100 0 z" fill="#ffffff" />
-    <ellipse cx="360" cy="230" rx="45" ry="60" fill="#ffffff" />
-    <path d="M345 280 h30 v110 h-30 z" fill="#ffffff" />
-  </svg>
+<svg width={size} height={size} viewBox="0 0 500 500" style={{ display: "inline-block", verticalAlign: "middle" }}>
+<circle cx="250" cy="250" r="230" fill="#dc2626" />
+<circle cx="250" cy="250" r="190" fill="none" stroke="#ffffff" strokeWidth="24" />
+<path d="M162 160 v180 h20 v-180 z" fill="#ffffff" />
+<path d="M202 160 v180 h20 v-180 z" fill="#ffffff" />
+<path d="M242 160 v180 h20 v-180 z" fill="#ffffff" />
+<path d="M162 230 h100 v20 h-100 z" fill="#ffffff" />
+<path d="M162 340 h100 v30 c0 30 -100 30 -100 0 z" fill="#ffffff" />
+<ellipse cx="360" cy="230" rx="45" ry="60" fill="#ffffff" />
+<path d="M345 280 h30 v110 h-30 z" fill="#ffffff" />
+</svg>
 );
-
 function App() {
-  const [user, setUser] = useState(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [authError, setAuthError] = useState("");
-  const [dataError, setDataError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState(null);
-
-  const [orders, setOrders] = useState([]);
-  const [restaurants, setRestaurants] = useState([]);
-  const [chargeRestaurantId, setChargeRestaurantId] = useState("");
-  const [hiddenChargeInput, setHiddenChargeInput] = useState("0");
-  const [chargeSearch, setChargeSearch] = useState("");
-  const [riders, setRiders] = useState([]);
-  const [managementEntries, setManagementEntries] = useState([]);
-  const [onlineEntries, setOnlineEntries] = useState([]);
-  const [locationsData, setLocationsData] = useState([]);
-  const [firestorePaperReports, setFirestorePaperReports] = useState([]);
-
-  const [page, setPage] = useState("overview");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [restaurantId, setRestaurantId] = useState("");
-  const [riderId, setRiderId] = useState("");
-
-  const [overviewDate, setOverviewDate] = useState(todayKey());
-  const [overviewSearch, setOverviewSearch] = useState("");
-  const [overviewStatus, setOverviewStatus] = useState("all");
-
-  const [resPageDate, setResPageDate] = useState(todayKey());
-  const [resPageStatus, setResPageStatus] = useState("all");
-  const [resPageSearch, setResPageSearch] = useState("");
-  const [noteModalEntry, setNoteModalEntry] = useState(null);
-  const [noteInputVal, setNoteInputVal] = useState("");
-
-  const [riderPageDate, setRiderPageDate] = useState(todayKey());
-  const [riderPageStatus, setRiderPageStatus] = useState("all");
-  const [riderPageSearch, setRiderPageSearch] = useState("");
-
-  const [editModalData, setEditModalData] = useState(null);
-  const [editAmountVal, setEditAmountVal] = useState("");
-  const [deleteModalData, setDeleteModalData] = useState(null);
-
-  const [savedEntityReports, setSavedEntityReports] = useState(() => {
-    try {
-      const saved = localStorage.getItem("foodish_saved_entity_reports");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [activeReportPrintData, setActiveReportPrintData] = useState(null);
-  const [activePaperworkPrintReport, setActivePaperworkPrintReport] = useState(null);
-
-  useEffect(() => {
-    document.title = "Foodish Accounts Dashboard";
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("foodish_saved_entity_reports", JSON.stringify(savedEntityReports));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [savedEntityReports]);
-
-  const [selectedRestaurantIds, setSelectedRestaurantIds] = useState(() => {
-    try {
-      const saved = localStorage.getItem("foodish_selected_restaurants");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [paperWorkRiderIds, setPaperWorkRiderIds] = useState(() => {
-    try {
-      const saved = localStorage.getItem("foodish_paperwork_riders");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [paperWorkDate, setPaperWorkDate] = useState(todayKey());
-
-  const [selectedDate, setSelectedDate] = useState(todayKey());
-  const [historyStart, setHistoryStart] = useState(todayKey());
-  const [historyEnd, setHistoryEnd] = useState(todayKey());
-  const [historyType, setHistoryType] = useState("restaurant");
-  const [onlineMethod, setOnlineMethod] = useState("bKash");
-
-  const [onlineAmount, setOnlineAmount] = useState("");
-  const [onlineNote, setOnlineNote] = useState("");
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("foodish_selected_restaurants", JSON.stringify(selectedRestaurantIds));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [selectedRestaurantIds]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("foodish_paperwork_riders", JSON.stringify(paperWorkRiderIds));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [paperWorkRiderIds]);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setAuthError("");
-      if (!currentUser) {
-        setUser(null);
-        setAuthReady(true);
-        return;
-      }
-      try {
-        if (!currentUser.email) throw new Error("Google account email paoya jayni.");
-        const adminQuery = query(
-          collection(db, COLLECTIONS.admins),
-          where("email", "==", currentUser.email.toLowerCase()),
-          limit(1)
-        );
-        const adminSnapshot = await getDocs(adminQuery);
-        if (adminSnapshot.empty) {
-          await signOut(auth);
-          setUser(null);
-          setAuthError(`${currentUser.email} admins collection-e anumatito noy.`);
-          setAuthReady(true);
-          return;
-        }
-        setUser(currentUser);
-        setAuthReady(true);
-      } catch (error) {
-        setUser(null);
-        setAuthError(`Admin verification failed: ${error.message}`);
-        setAuthReady(true);
-      }
-    });
-    return unsubscribe;
-  }, []);
-
-  async function handleGoogleLogin() {
-    setAuthError("");
-    try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: "select_account" });
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      setAuthError(`Google sign-in failed: ${error.message}`);
-    }
-  }
-
-  const handleManualRefresh = () => {
-    setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      setNotice({ type: "success", text: "Data successfully refreshed!" });
-    }, 600);
-  };
-
-  useEffect(() => {
-    if (!user) return undefined;
-    setLoading(true);
-    setDataError("");
-    const unsubs = [];
-    const subscribe = (name, setter, optional = false) => {
-      const q = query(collection(db, name));
-      const unsub = onSnapshot(
-        q,
-        (snapshot) => {
-          setter(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
-          setLoading(false);
-        },
-        (error) => {
-          if (!optional) {
-            setDataError(`${name}: ${error.message}.`);
-          }
-          setter([]);
-          setLoading(false);
-        }
-      );
-      unsubs.push(unsub);
-    };
-
+const [user, setUser] = useState(null);
+const [authReady, setAuthReady] = useState(false);
+const [authError, setAuthError] = useState("");
+const [dataError, setDataError] = useState("");
+const [loading, setLoading] = useState(true);
+const [saving, setSaving] = useState(false);
+const [notice, setNotice] = useState(null);
+const [orders, setOrders] = useState([]);
+const [restaurants, setRestaurants] = useState([]);
+const [chargeRestaurantId, setChargeRestaurantId] = useState("");
+const [hiddenChargeInput, setHiddenChargeInput] = useState("0");
+const [chargeSearch, setChargeSearch] = useState("");
+const [riders, setRiders] = useState([]);
+const [managementEntries, setManagementEntries] = useState([]);
+const [onlineEntries, setOnlineEntries] = useState([]);
+const [locationsData, setLocationsData] = useState([]);
+const [firestorePaperReports, setFirestorePaperReports] = useState([]);
+const [page, setPage] = useState("overview");
+const [sidebarOpen, setSidebarOpen] = useState(false);
+const [restaurantId, setRestaurantId] = useState("");
+const [riderId, setRiderId] = useState("");
+const [overviewDate, setOverviewDate] = useState(todayKey());
+const [overviewSearch, setOverviewSearch] = useState("");
+const [overviewStatus, setOverviewStatus] = useState("all");
+const [resPageDate, setResPageDate] = useState(todayKey());
+const [resPageStatus, setResPageStatus] = useState("all");
+const [resPageSearch, setResPageSearch] = useState("");
+const [noteModalEntry, setNoteModalEntry] = useState(null);
+const [noteInputVal, setNoteInputVal] = useState("");
+const [riderPageDate, setRiderPageDate] = useState(todayKey());
+const [riderPageStatus, setRiderPageStatus] = useState("all");
+const [riderPageSearch, setRiderPageSearch] = useState("");
+// Online Payment page filter states
+const [onlinePayDate, setOnlinePayDate] = useState(todayKey());
+const [onlinePayMethodFilter, setOnlinePayMethodFilter] = useState("all");
+const [onlinePaySearch, setOnlinePaySearch] = useState("");
+const [editModalData, setEditModalData] = useState(null);
+const [editAmountVal, setEditAmountVal] = useState("");
+const [deleteModalData, setDeleteModalData] = useState(null);
+const [savedEntityReports, setSavedEntityReports] = useState(() => {
+try {
+const saved = localStorage.getItem("foodish_saved_entity_reports");
+return saved ? JSON.parse(saved) : [];
+} catch {
+return [];
+}
+});
+const [activeReportPrintData, setActiveReportPrintData] = useState(null);
+const [activePaperworkPrintReport, setActivePaperworkPrintReport] = useState(null);
+useEffect(() => {
+document.title = "Foodish Accounts Dashboard";
+}, []);
+useEffect(() => {
+try {
+localStorage.setItem("foodish_saved_entity_reports", JSON.stringify(savedEntityReports));
+} catch (e) {
+console.error(e);
+}
+}, [savedEntityReports]);
+const [selectedRestaurantIds, setSelectedRestaurantIds] = useState(() => {
+try {
+const saved = localStorage.getItem("foodish_selected_restaurants");
+return saved ? JSON.parse(saved) : [];
+} catch {
+return [];
+}
+});
+const [paperWorkRiderIds, setPaperWorkRiderIds] = useState(() => {
+try {
+const saved = localStorage.getItem("foodish_paperwork_riders");
+return saved ? JSON.parse(saved) : [];
+} catch {
+return [];
+}
+});
+const [paperWorkDate, setPaperWorkDate] = useState(todayKey());
+const [selectedDate, setSelectedDate] = useState(todayKey());
+const [historyStart, setHistoryStart] = useState(todayKey());
+const [historyEnd, setHistoryEnd] = useState(todayKey());
+const [historyType, setHistoryType] = useState("restaurant");
+const [onlineMethod, setOnlineMethod] = useState("bKash");
+const [onlineAmount, setOnlineAmount] = useState("");
+const [onlineNote, setOnlineNote] = useState("");
+useEffect(() => {
+try {
+localStorage.setItem("foodish_selected_restaurants", JSON.stringify(selectedRestaurantIds));
+} catch (e) {
+console.error(e);
+}
+}, [selectedRestaurantIds]);
+useEffect(() => {
+try {
+localStorage.setItem("foodish_paperwork_riders", JSON.stringify(paperWorkRiderIds));
+} catch (e) {
+console.error(e);
+}
+}, [paperWorkRiderIds]);
+useEffect(() => {
+const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+setAuthError("");
+if (!currentUser) {
+setUser(null);
+setAuthReady(true);
+return;
+}
+try {
+if (!currentUser.email) throw new Error("Google account email paoya jayni.");
+const adminQuery = query(
+collection(db, COLLECTIONS.admins),
+where("email", "==", currentUser.email.toLowerCase()),
+limit(1)
+);
+const adminSnapshot = await getDocs(adminQuery);
+if (adminSnapshot.empty) {
+await signOut(auth);
+setUser(null);
+setAuthError(`${currentUser.email} admins collection-e anumatito noy.`);
+setAuthReady(true);
+return;
+}
+setUser(currentUser);
+setAuthReady(true);
+} catch (error) {
+setUser(null);
+setAuthError(`Admin verification failed: ${error.message}`);
+setAuthReady(true);
+}
+});
+return unsubscribe;
+}, []);
+async function handleGoogleLogin() {
+setAuthError("");
+try {
+const provider = new GoogleAuthProvider();
+provider.setCustomParameters({ prompt: "select_account" });
+await signInWithPopup(auth, provider);
+} catch (error) {
+setAuthError(`Google sign-in failed: ${error.message}`);
+}
+}
+const handleManualRefresh = () => {
+setLoading(true);
+setTimeout(() => {
+setLoading(false);
+setNotice({ type: "success", text: "Data successfully refreshed!" });
+}, 600);
+};
+useEffect(() => {
+if (!user) return undefined;
+setLoading(true);
+setDataError("");
+const unsubs = [];
+const subscribe = (name, setter, optional = false) => {
+const q = query(collection(db, name));
+const unsub = onSnapshot(
+q,
+(snapshot) => {
+setter(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+setLoading(false);
+},
+(error) => {
+if (!optional) {
+setDataError(`${name}: ${error.message}.`);
+}
+setter([]);
+setLoading(false);
+}
+);
+unsubs.push(unsub);
+};
     subscribe(COLLECTIONS.orders, setOrders);
     subscribe(COLLECTIONS.restaurants, setRestaurants);
     subscribe(COLLECTIONS.riders, setRiders);
@@ -316,92 +286,82 @@ function App() {
     subscribe(COLLECTIONS.paperworkReports, setFirestorePaperReports, true);
 
     return () => unsubs.forEach((unsubscribe) => unsubscribe());
-  }, [user]);
-
-  useEffect(() => {
-    if (!notice) return undefined;
-    const timer = setTimeout(() => setNotice(null), 3200);
-    return () => clearTimeout(timer);
-  }, [notice]);
-
-  const selectedRestaurant =
-    restaurants.find((item) => item.id === restaurantId) || restaurants[0];
-  const selectedChargeRestaurant =
-    restaurants.find((item) => item.id === chargeRestaurantId) || restaurants[0];
-
-  useEffect(() => {
-    if (!chargeRestaurantId && restaurants.length) {
-      setChargeRestaurantId(restaurants[0].id);
-    }
-  }, [restaurants, chargeRestaurantId]);
-
-  useEffect(() => {
-    if (selectedChargeRestaurant) {
-      const current = Number(selectedChargeRestaurant.hiddenDeliveryCharge ?? 0);
-      setHiddenChargeInput(Number.isFinite(current) && current >= 0 ? String(current) : "0");
-    }
-  }, [chargeRestaurantId, restaurants]);
-
-  async function saveHiddenDeliveryCharge(event) {
-    event.preventDefault();
-    if (!chargeRestaurantId) {
-      setNotice({ type: "error", text: "Please select a restaurant first." });
-      return;
-    }
-    const amount = Number(hiddenChargeInput);
-    if (!Number.isFinite(amount) || amount < 0) {
-      setNotice({ type: "error", text: "Enter a valid charge amount (0 or greater)." });
-      return;
-    }
-    setSaving(true);
-    try {
-      await updateDoc(doc(db, COLLECTIONS.restaurants, chargeRestaurantId), {
-        hiddenDeliveryCharge: amount,
-        hiddenDeliveryChargeUpdatedAt: serverTimestamp(),
-      });
-      setRestaurants((current) => current.map((item) =>
-        item.id === chargeRestaurantId
-          ? { ...item, hiddenDeliveryCharge: amount }
-          : item
-      ));
-      setNotice({ type: "success", text: `Hidden delivery charge updated for ${selectedChargeRestaurant?.name || "the selected restaurant"}.` });
-    } catch (error) {
-      setNotice({ type: "error", text: `Could not save charge: ${error.message}` });
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const selectedRider = riders.find((item) => item.id === riderId) || riders[0];
-
-  useEffect(() => {
-    if (!restaurantId && restaurants.length) setRestaurantId(restaurants[0].id);
-  }, [restaurants, restaurantId]);
-
-  useEffect(() => {
-    if (!riderId && riders.length) setRiderId(riders[0].id);
-  }, [riders, riderId]);
-
-  async function handleBulkRestaurantAction(turnOn) {
-    if (!selectedRestaurantIds.length) {
-      setNotice({ type: "error", text: "Prothomay kompokhe ekti restaurant select korun." });
-      return;
-    }
-    setSaving(true);
-    try {
-      let collectedLocations = [];
-      if (locationsData && locationsData.length > 0) {
-        locationsData.forEach((loc) => {
-          const locName = loc.name || loc.id;
-          if (locName) collectedLocations.push(locName);
-          if (Array.isArray(loc.subLocations)) {
-            loc.subLocations.forEach((sub) => {
-              if (sub) collectedLocations.push(sub);
-            });
-          }
-        });
-      }
-
+}, [user]);
+useEffect(() => {
+if (!notice) return undefined;
+const timer = setTimeout(() => setNotice(null), 3200);
+return () => clearTimeout(timer);
+}, [notice]);
+const selectedRestaurant =
+restaurants.find((item) => item.id === restaurantId) || restaurants[0];
+const selectedChargeRestaurant =
+restaurants.find((item) => item.id === chargeRestaurantId) || restaurants[0];
+useEffect(() => {
+if (!chargeRestaurantId && restaurants.length) {
+setChargeRestaurantId(restaurants[0].id);
+}
+}, [restaurants, chargeRestaurantId]);
+useEffect(() => {
+if (selectedChargeRestaurant) {
+const current = Number(selectedChargeRestaurant.hiddenDeliveryCharge ?? 0);
+setHiddenChargeInput(Number.isFinite(current) && current >= 0 ? String(current) : "0");
+}
+}, [chargeRestaurantId, restaurants]);
+async function saveHiddenDeliveryCharge(event) {
+event.preventDefault();
+if (!chargeRestaurantId) {
+setNotice({ type: "error", text: "Please select a restaurant first." });
+return;
+}
+const amount = Number(hiddenChargeInput);
+if (!Number.isFinite(amount) || amount < 0) {
+setNotice({ type: "error", text: "Enter a valid charge amount (0 or greater)." });
+return;
+}
+setSaving(true);
+try {
+await updateDoc(doc(db, COLLECTIONS.restaurants, chargeRestaurantId), {
+hiddenDeliveryCharge: amount,
+hiddenDeliveryChargeUpdatedAt: serverTimestamp(),
+});
+setRestaurants((current) => current.map((item) =>
+item.id === chargeRestaurantId
+? { ...item, hiddenDeliveryCharge: amount }
+: item
+));
+setNotice({ type: "success", text: `Hidden delivery charge updated for ${selectedChargeRestaurant?.name || "the selected restaurant"}.` });
+} catch (error) {
+setNotice({ type: "error", text: `Could not save charge: ${error.message}` });
+} finally {
+setSaving(false);
+}
+}
+const selectedRider = riders.find((item) => item.id === riderId) || riders[0];
+useEffect(() => {
+if (!restaurantId && restaurants.length) setRestaurantId(restaurants[0].id);
+}, [restaurants, restaurantId]);
+useEffect(() => {
+if (!riderId && riders.length) setRiderId(riders[0].id);
+}, [riders, riderId]);
+async function handleBulkRestaurantAction(turnOn) {
+if (!selectedRestaurantIds.length) {
+setNotice({ type: "error", text: "Prothomay kompokhe ekti restaurant select korun." });
+return;
+}
+setSaving(true);
+try {
+let collectedLocations = [];
+if (locationsData && locationsData.length > 0) {
+locationsData.forEach((loc) => {
+const locName = loc.name || loc.id;
+if (locName) collectedLocations.push(locName);
+if (Array.isArray(loc.subLocations)) {
+loc.subLocations.forEach((sub) => {
+if (sub) collectedLocations.push(sub);
+});
+}
+});
+}
       if (collectedLocations.length === 0) {
         restaurants.forEach((r) => {
           if (Array.isArray(r.availableLocations)) {
@@ -442,36 +402,31 @@ function App() {
     } finally {
       setSaving(false);
     }
-  }
-
-  const toggleRestaurantSelection = (id) => {
-    setSelectedRestaurantIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
-  };
-
-  const selectAllRestaurants = () => setSelectedRestaurantIds(restaurants.map((r) => r.id));
-  const clearSelectedRestaurants = () => setSelectedRestaurantIds([]);
-
-  const togglePaperWorkRider = (id) => {
-    setPaperWorkRiderIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
-  };
-  const selectAllPaperWorkRiders = () => setPaperWorkRiderIds(riders.map((r) => r.id));
-  const clearPaperWorkRiders = () => setPaperWorkRiderIds([]);
-
-  async function handleUpdateManagementEntry({ entityType, entityId, entityName, type, amount, note, date }) {
-    setSaving(true);
-    try {
-      const existingEntry = managementEntries.find(
-        (entry) =>
-          entry.entityType === entityType &&
-          String(entry.entityId) === String(entityId) &&
-          dateKey(entry.date || entry.createdAt) === date &&
-          normalized(entry.type) === normalized(type)
-      );
-
+}
+const toggleRestaurantSelection = (id) => {
+setSelectedRestaurantIds((prev) =>
+prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+);
+};
+const selectAllRestaurants = () => setSelectedRestaurantIds(restaurants.map((r) => r.id));
+const clearSelectedRestaurants = () => setSelectedRestaurantIds([]);
+const togglePaperWorkRider = (id) => {
+setPaperWorkRiderIds((prev) =>
+prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+);
+};
+const selectAllPaperWorkRiders = () => setPaperWorkRiderIds(riders.map((r) => r.id));
+const clearPaperWorkRiders = () => setPaperWorkRiderIds([]);
+async function handleUpdateManagementEntry({ entityType, entityId, entityName, type, amount, note, date }) {
+setSaving(true);
+try {
+const existingEntry = managementEntries.find(
+(entry) =>
+entry.entityType === entityType &&
+String(entry.entityId) === String(entityId) &&
+dateKey(entry.date || entry.createdAt) === date &&
+normalized(entry.type) === normalized(type)
+);
       const payload = {
         entityType,
         entityId,
@@ -497,27 +452,24 @@ function App() {
     } finally {
       setSaving(false);
     }
-  }
-
-  const ridersWithBill = useMemo(() => {
-    return riders.map((r) => {
-      const riderOrders = orders.filter((o) => {
-        return (
-          String(o.riderId || "") === String(r.id) &&
-          dateKey(o.createdAt) === paperWorkDate &&
-          isDelivered(o)
-        );
-      });
-      const bill = riderOrders.reduce((sum, o) => sum + itemSubtotal(o.items), 0);
-      return { ...r, calculatedBill: bill };
-    }).sort((a, b) => b.calculatedBill - a.calculatedBill);
-  }, [riders, orders, paperWorkDate]);
-
-  const paperWorkTableRows = useMemo(() => {
-    return paperWorkRiderIds.map((rId) => {
-      const riderObj = riders.find((r) => r.id === rId);
-      const riderName = riderObj ? riderObj.name : rId;
-
+}
+const ridersWithBill = useMemo(() => {
+return riders.map((r) => {
+const riderOrders = orders.filter((o) => {
+return (
+String(o.riderId || "") === String(r.id) &&
+dateKey(o.createdAt) === paperWorkDate &&
+isDelivered(o)
+);
+});
+const bill = riderOrders.reduce((sum, o) => sum + itemSubtotal(o.items), 0);
+return { ...r, calculatedBill: bill };
+}).sort((a, b) => b.calculatedBill - a.calculatedBill);
+}, [riders, orders, paperWorkDate]);
+const paperWorkTableRows = useMemo(() => {
+return paperWorkRiderIds.map((rId) => {
+const riderObj = riders.find((r) => r.id === rId);
+const riderName = riderObj ? riderObj.name : rId;
       const riderOrdersOnDate = orders.filter((o) => {
         const matchesRider = String(o.riderId || "") === String(rId);
         const matchesDate = dateKey(o.createdAt) === paperWorkDate;
@@ -568,38 +520,34 @@ function App() {
         fine: fineAmount,
       };
     });
-  }, [paperWorkRiderIds, paperWorkDate, orders, riders, managementEntries]);
-
-  const paperWorkTotals = useMemo(() => {
-    return paperWorkTableRows.reduce(
-      (acc, row) => ({
-        delivered: acc.delivered + row.delivered,
-        online: acc.online + row.online,
-        bill: acc.bill + row.bill,
-        charge: acc.charge + row.charge,
-        collect: acc.collect + row.collect,
-        salary: acc.salary + row.salary,
-        fine: acc.fine + row.fine,
-      }),
-      { delivered: 0, online: 0, bill: 0, charge: 0, collect: 0, salary: 0, fine: 0 }
-    );
-  }, [paperWorkTableRows]);
-
-  const calculatedProfit = useMemo(() => {
-    return (paperWorkTotals.bill * 0.0941) + paperWorkTotals.charge;
-  }, [paperWorkTotals]);
-
-  async function saveCurrentPaperWorkReport() {
-    setSaving(true);
-    try {
-      const reportData = {
-        date: paperWorkDate,
-        savedAt: new Date().toISOString(),
-        rows: JSON.parse(JSON.stringify(paperWorkTableRows)),
-        totals: { ...paperWorkTotals },
-        profit: calculatedProfit,
-      };
-
+}, [paperWorkRiderIds, paperWorkDate, orders, riders, managementEntries]);
+const paperWorkTotals = useMemo(() => {
+return paperWorkTableRows.reduce(
+(acc, row) => ({
+delivered: acc.delivered + row.delivered,
+online: acc.online + row.online,
+bill: acc.bill + row.bill,
+charge: acc.charge + row.charge,
+collect: acc.collect + row.collect,
+salary: acc.salary + row.salary,
+fine: acc.fine + row.fine,
+}),
+{ delivered: 0, online: 0, bill: 0, charge: 0, collect: 0, salary: 0, fine: 0 }
+);
+}, [paperWorkTableRows]);
+const calculatedProfit = useMemo(() => {
+return (paperWorkTotals.bill * 0.0941) + paperWorkTotals.charge;
+}, [paperWorkTotals]);
+async function saveCurrentPaperWorkReport() {
+setSaving(true);
+try {
+const reportData = {
+date: paperWorkDate,
+savedAt: new Date().toISOString(),
+rows: JSON.parse(JSON.stringify(paperWorkTableRows)),
+totals: { ...paperWorkTotals },
+profit: calculatedProfit,
+};
       const existing = firestorePaperReports.find(r => r.date === paperWorkDate);
       if (existing) {
         await updateDoc(doc(db, COLLECTIONS.paperworkReports, existing.id), reportData);
@@ -613,28 +561,25 @@ function App() {
     } finally {
       setSaving(false);
     }
-  }
-
-  const deleteSavedReport = (reportId) => {
-    setDeleteModalData({
-      title: "Delete Saved Report",
-      message: "Are you sure you want to delete this saved report?",
-      onConfirm: async () => {
-        try {
-          await deleteDoc(doc(db, COLLECTIONS.paperworkReports, reportId));
-          setNotice({ type: "success", text: "Saved report deleted successfully." });
-        } catch (error) {
-          setNotice({ type: "error", text: `Delete failed: ${error.message}` });
-        }
-      }
-    });
-  };
-
-  const downloadSavedReportCSV = (report) => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += `Paper Work Report - Date: ${report.date}\n\n`;
-    csvContent += "Name,Delivered,Online,Bill,Charge,Salary,Fine\n";
-
+}
+const deleteSavedReport = (reportId) => {
+setDeleteModalData({
+title: "Delete Saved Report",
+message: "Are you sure you want to delete this saved report?",
+onConfirm: async () => {
+try {
+await deleteDoc(doc(db, COLLECTIONS.paperworkReports, reportId));
+setNotice({ type: "success", text: "Saved report deleted successfully." });
+} catch (error) {
+setNotice({ type: "error", text: `Delete failed: ${error.message}` });
+}
+}
+});
+};
+const downloadSavedReportCSV = (report) => {
+let csvContent = "data:text/csv;charset=utf-8,";
+csvContent += `Paper Work Report - Date: ${report.date}\n\n`;
+csvContent += "Name,Delivered,Online,Bill,Charge,Salary,Fine\n";
     report.rows.forEach((r) => {
       csvContent += `"${r.name}",${r.delivered},${r.online},${r.bill},${r.charge},${r.salary},${r.fine}\n`;
     });
@@ -649,21 +594,18 @@ function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  };
-
-  const overviewOrdersOnDate = useMemo(
-    () => orders.filter((order) => dateKey(order.createdAt) === overviewDate),
-    [orders, overviewDate]
-  );
-
-  const overviewFilteredOrders = useMemo(() => {
-    return overviewOrdersOnDate.filter((order) => {
-      const status = normalized(order.orderStatus);
-      if (overviewStatus === "delivered" && !isDelivered(order)) return false;
-      if (overviewStatus === "cancelled" && !isCancelled(order)) return false;
-      if (overviewStatus === "pending" && !["pending", "processing", "accepted"].includes(status)) return false;
-      if (overviewStatus === "on_the_way" && !["on the way", "ontheway", "picked up", "dispatched"].includes(status)) return false;
-
+};
+const overviewOrdersOnDate = useMemo(
+() => orders.filter((order) => dateKey(order.createdAt) === overviewDate),
+[orders, overviewDate]
+);
+const overviewFilteredOrders = useMemo(() => {
+return overviewOrdersOnDate.filter((order) => {
+const status = normalized(order.orderStatus);
+if (overviewStatus === "delivered" && !isDelivered(order)) return false;
+if (overviewStatus === "cancelled" && !isCancelled(order)) return false;
+if (overviewStatus === "pending" && !["pending", "processing", "accepted"].includes(status)) return false;
+if (overviewStatus === "on_the_way" && !["on the way", "ontheway", "picked up", "dispatched"].includes(status)) return false;
       if (!overviewSearch) return true;
       const s = normalized(overviewSearch);
       const orderIdStr = normalized(order.orderId || order.id);
@@ -678,23 +620,20 @@ function App() {
         restaurantNames.includes(s)
       );
     }).sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
-  }, [overviewOrdersOnDate, overviewSearch, overviewStatus]);
-
-  const deliveredOverview = overviewOrdersOnDate.filter(isDelivered);
-  const cancelledOverview = overviewOrdersOnDate.filter(isCancelled);
-  const deliveredTotalOverview = deliveredOverview.reduce((sum, order) => sum + orderAmount(order), 0);
-  const cancelledTotalOverview = cancelledOverview.reduce((sum, order) => sum + orderAmount(order), 0);
-  const codTotalOverview = deliveredOverview
-    .filter(isCOD)
-    .reduce((sum, order) => sum + orderAmount(order), 0);
-
-  const restaurantPageOrders = useMemo(() => {
-    if (!selectedRestaurant) return [];
-    return orders.filter((order) => {
-      const matchesDate = dateKey(order.createdAt) === resPageDate;
-      const subtotal = itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id);
-      if (!matchesDate || subtotal <= 0) return false;
-
+}, [overviewOrdersOnDate, overviewSearch, overviewStatus]);
+const deliveredOverview = overviewOrdersOnDate.filter(isDelivered);
+const cancelledOverview = overviewOrdersOnDate.filter(isCancelled);
+const deliveredTotalOverview = deliveredOverview.reduce((sum, order) => sum + orderAmount(order), 0);
+const cancelledTotalOverview = cancelledOverview.reduce((sum, order) => sum + orderAmount(order), 0);
+const codTotalOverview = deliveredOverview
+.filter(isCOD)
+.reduce((sum, order) => sum + orderAmount(order), 0);
+const restaurantPageOrders = useMemo(() => {
+if (!selectedRestaurant) return [];
+return orders.filter((order) => {
+const matchesDate = dateKey(order.createdAt) === resPageDate;
+const subtotal = itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id);
+if (!matchesDate || subtotal <= 0) return false;
       const status = normalized(order.orderStatus);
       if (resPageStatus === "delivered" && !isDelivered(order)) return false;
       if (resPageStatus === "cancelled" && !isCancelled(order)) return false;
@@ -708,18 +647,27 @@ function App() {
       const userPhone = normalized(order.userPhone);
 
       return orderIdStr.includes(s) || userName.includes(s) || userPhone.includes(s);
-    }).map((order) => ({
-      ...order,
-      restaurantSubtotal: itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id),
-    })).sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
-  }, [orders, selectedRestaurant, resPageDate, resPageStatus, resPageSearch]);
+    }).map((order) => {
+      const filteredItems = (order.items || []).filter((item) => {
+        const itemRestaurant = normalized(item.miniResName || item.restaurantName);
+        const itemResId = String(item.miniResId || item.restaurantId || "");
+        const matchesName = selectedRestaurant.name && itemRestaurant === normalized(selectedRestaurant.name);
+        const matchesId = selectedRestaurant.id && itemResId === String(selectedRestaurant.id);
+        return matchesName || matchesId;
+      });
 
-  const restaurantPageStats = useMemo(() => {
-    if (!selectedRestaurant) return { deliveredTotal: 0, pendingTotal: 0, cancelledTotal: 0 };
-    const allResOrdersOnDate = orders.filter((order) => {
-      return dateKey(order.createdAt) === resPageDate && itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id) > 0;
-    });
-
+      return {
+        ...order,
+        items: filteredItems,
+        restaurantSubtotal: itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id),
+      };
+    }).sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
+}, [orders, selectedRestaurant, resPageDate, resPageStatus, resPageSearch]);
+const restaurantPageStats = useMemo(() => {
+if (!selectedRestaurant) return { deliveredTotal: 0, pendingTotal: 0, cancelledTotal: 0 };
+const allResOrdersOnDate = orders.filter((order) => {
+return dateKey(order.createdAt) === resPageDate && itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id) > 0;
+});
     let deliveredSum = 0;
     let pendingSum = 0;
     let cancelledSum = 0;
@@ -736,15 +684,13 @@ function App() {
     });
 
     return { deliveredTotal: deliveredSum, pendingTotal: pendingSum, cancelledTotal: cancelledSum };
-  }, [orders, selectedRestaurant, resPageDate]);
-
-  const riderPageOrders = useMemo(() => {
-    if (!selectedRider) return [];
-    return orders.filter((order) => {
-      const matchesDate = dateKey(order.createdAt) === riderPageDate;
-      const matchesRider = String(order.riderId || "") === String(selectedRider.id);
-      if (!matchesDate || !matchesRider) return false;
-
+}, [orders, selectedRestaurant, resPageDate]);
+const riderPageOrders = useMemo(() => {
+if (!selectedRider) return [];
+return orders.filter((order) => {
+const matchesDate = dateKey(order.createdAt) === riderPageDate;
+const matchesRider = String(order.riderId || "") === String(selectedRider.id);
+if (!matchesDate || !matchesRider) return false;
       const status = normalized(order.orderStatus);
       if (riderPageStatus === "delivered" && !isDelivered(order)) return false;
       if (riderPageStatus === "cancelled" && !isCancelled(order)) return false;
@@ -760,22 +706,25 @@ function App() {
 
       return orderIdStr.includes(s) || userName.includes(s) || userPhone.includes(s) || restNames.includes(s);
     }).sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
-  }, [orders, selectedRider, riderPageDate, riderPageStatus, riderPageSearch]);
-
-  const riderPageStats = useMemo(() => {
-    if (!selectedRider) return { deliveredTotal: 0, pendingTotal: 0, cancelledTotal: 0 };
-    const allRiderOrdersOnDate = orders.filter((order) => {
-      return dateKey(order.createdAt) === riderPageDate && String(order.riderId || "") === String(selectedRider.id);
-    });
-
-    let deliveredSum = 0;
+}, [orders, selectedRider, riderPageDate, riderPageStatus, riderPageSearch]);
+const riderPageStats = useMemo(() => {
+if (!selectedRider) return { deliveredTotal: 0, deliveredCod: 0, deliveredOnline: 0, pendingTotal: 0, cancelledTotal: 0 };
+const allRiderOrdersOnDate = orders.filter((order) => {
+return dateKey(order.createdAt) === riderPageDate && String(order.riderId || "") === String(selectedRider.id);
+});
+    let deliveredCodSum = 0;
+    let deliveredOnlineSum = 0;
     let pendingSum = 0;
     let cancelledSum = 0;
 
     allRiderOrdersOnDate.forEach((order) => {
       const amt = orderAmount(order);
       if (isDelivered(order)) {
-        deliveredSum += amt;
+        if (isCOD(order)) {
+          deliveredCodSum += amt;
+        } else {
+          deliveredOnlineSum += amt;
+        }
       } else if (isCancelled(order)) {
         cancelledSum += amt;
       } else {
@@ -783,41 +732,76 @@ function App() {
       }
     });
 
-    return { deliveredTotal: deliveredSum, pendingTotal: pendingSum, cancelledTotal: cancelledSum };
-  }, [orders, selectedRider, riderPageDate]);
+    return {
+      deliveredTotal: deliveredCodSum + deliveredOnlineSum,
+      deliveredCod: deliveredCodSum,
+      deliveredOnline: deliveredOnlineSum,
+      pendingTotal: pendingSum,
+      cancelledTotal: cancelledSum,
+    };
+}, [orders, selectedRider, riderPageDate]);
+// Online Payment Page Computed Data
+const onlinePaymentOrders = useMemo(() => {
+return orders.filter((order) => {
+const matchesDate = dateKey(order.createdAt) === onlinePayDate;
+const notCOD = !isCOD(order); // Non-COD implies online payment (bKash/Nagad/etc.)
+if (!matchesDate || !notCOD) return false;
+      if (onlinePayMethodFilter !== "all") {
+        const payMethod = normalized(order.payment || order.paymentMethod);
+        if (!payMethod.includes(normalized(onlinePayMethodFilter))) return false;
+      }
 
-  const restaurantPhysicalEntry = managementEntries.find(
-    (e) => e.entityType === "restaurant" && String(e.entityId) === String(restaurantId) && dateKey(e.date || e.createdAt) === resPageDate && ["collection", "physical"].includes(normalized(e.type))
-  );
+      if (!onlinePaySearch) return true;
+      const s = normalized(onlinePaySearch);
+      const orderIdStr = normalized(order.orderId || order.id);
+      const userName = normalized(order.userName);
+      const userPhone = normalized(order.userPhone);
+      const trxId = normalized(order.trxId || order.transactionId || order.paymentTrxId || "");
 
-  const riderCollectionEntry = managementEntries.find(
-    (e) => e.entityType === "rider" && String(e.entityId) === String(riderId) && dateKey(e.date || e.createdAt) === riderPageDate && ["collection", "physical"].includes(normalized(e.type))
-  );
-  const riderFineEntry = managementEntries.find(
-    (e) => e.entityType === "rider" && String(e.entityId) === String(riderId) && dateKey(e.date || e.createdAt) === riderPageDate && normalized(e.type) === "fine"
-  );
-  const riderSalaryEntry = managementEntries.find(
-    (e) => e.entityType === "rider" && String(e.entityId) === String(riderId) && dateKey(e.date || e.createdAt) === riderPageDate && normalized(e.type) === "salary"
-  );
-
-  const bKashTotal = onlineEntries
-    .filter((entry) => normalized(entry.method) === "bkash")
-    .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-  const nagadTotal = onlineEntries
-    .filter((entry) => normalized(entry.method) === "nagad")
-    .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-  const filteredOnline = onlineEntries
-    .filter(
-      (entry) =>
-        normalized(entry.method) === normalized(onlineMethod) &&
-        dateKey(entry.date || entry.createdAt) === selectedDate
-    )
-    .sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
-
-  const historyRestaurantRows = useMemo(() => {
-    if (!historyStart || !historyEnd || !restaurantId) return [];
-    const rowsMap = new Map();
-
+      return orderIdStr.includes(s) || userName.includes(s) || userPhone.includes(s) || trxId.includes(s);
+    }).sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
+}, [orders, onlinePayDate, onlinePayMethodFilter, onlinePaySearch]);
+const onlinePaymentTotals = useMemo(() => {
+let bkashSum = 0;
+let nagadSum = 0;
+let otherSum = 0;
+onlinePaymentOrders.forEach((o) => {
+const method = normalized(o.payment || o.paymentMethod);
+const amt = orderAmount(o);
+if (method.includes("bkash")) bkashSum += amt;
+else if (method.includes("nagad")) nagadSum += amt;
+else otherSum += amt;
+});
+return { bkash: bkashSum, nagad: nagadSum, other: otherSum, total: bkashSum + nagadSum + otherSum };
+}, [onlinePaymentOrders]);
+const restaurantPhysicalEntry = managementEntries.find(
+(e) => e.entityType === "restaurant" && String(e.entityId) === String(restaurantId) && dateKey(e.date || e.createdAt) === resPageDate && ["collection", "physical"].includes(normalized(e.type))
+);
+const riderCollectionEntry = managementEntries.find(
+(e) => e.entityType === "rider" && String(e.entityId) === String(riderId) && dateKey(e.date || e.createdAt) === riderPageDate && ["collection", "physical"].includes(normalized(e.type))
+);
+const riderFineEntry = managementEntries.find(
+(e) => e.entityType === "rider" && String(e.entityId) === String(riderId) && dateKey(e.date || e.createdAt) === riderPageDate && normalized(e.type) === "fine"
+);
+const riderSalaryEntry = managementEntries.find(
+(e) => e.entityType === "rider" && String(e.entityId) === String(riderId) && dateKey(e.date || e.createdAt) === riderPageDate && normalized(e.type) === "salary"
+);
+const bKashTotal = onlineEntries
+.filter((entry) => normalized(entry.method) === "bkash")
+.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+const nagadTotal = onlineEntries
+.filter((entry) => normalized(entry.method) === "nagad")
+.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+const filteredOnline = onlineEntries
+.filter(
+(entry) =>
+normalized(entry.method) === normalized(onlineMethod) &&
+dateKey(entry.date || entry.createdAt) === selectedDate
+)
+.sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
+const historyRestaurantRows = useMemo(() => {
+if (!historyStart || !historyEnd || !restaurantId) return [];
+const rowsMap = new Map();
     let curr = new Date(historyStart);
     const end = new Date(historyEnd);
     while (curr <= end) {
@@ -849,22 +833,19 @@ function App() {
     });
 
     return Array.from(rowsMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-  }, [orders, managementEntries, historyStart, historyEnd, restaurantId, selectedRestaurant]);
-
-  const historyRestaurantTotals = useMemo(() => {
-    return historyRestaurantRows.reduce(
-      (acc, row) => ({
-        itemSales: acc.itemSales + row.itemSales,
-        physicalAmount: acc.physicalAmount + row.physicalAmount,
-      }),
-      { itemSales: 0, physicalAmount: 0 }
-    );
-  }, [historyRestaurantRows]);
-
-  const historyRiderRows = useMemo(() => {
-    if (!historyStart || !historyEnd || !riderId) return [];
-    const rowsMap = new Map();
-
+}, [orders, managementEntries, historyStart, historyEnd, restaurantId, selectedRestaurant]);
+const historyRestaurantTotals = useMemo(() => {
+return historyRestaurantRows.reduce(
+(acc, row) => ({
+itemSales: acc.itemSales + row.itemSales,
+physicalAmount: acc.physicalAmount + row.physicalAmount,
+}),
+{ itemSales: 0, physicalAmount: 0 }
+);
+}, [historyRestaurantRows]);
+const historyRiderRows = useMemo(() => {
+if (!historyStart || !historyEnd || !riderId) return [];
+const rowsMap = new Map();
     let curr = new Date(historyStart);
     const end = new Date(historyEnd);
     while (curr <= end) {
@@ -899,68 +880,62 @@ function App() {
     });
 
     return Array.from(rowsMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-  }, [orders, managementEntries, historyStart, historyEnd, riderId]);
-
-  const historyRiderTotals = useMemo(() => {
-    return historyRiderRows.reduce(
-      (acc, row) => ({
-        deliveredCount: acc.deliveredCount + row.deliveredCount,
-        deliveredCod: acc.deliveredCod + row.deliveredCod,
-        collection: acc.collection + row.collection,
-        fine: acc.fine + row.fine,
-        salary: acc.salary + row.salary,
-      }),
-      { deliveredCount: 0, deliveredCod: 0, collection: 0, fine: 0, salary: 0 }
-    );
-  }, [historyRiderRows]);
-
-  const saveEntityReportArchive = (type) => {
-    const isRes = type === "restaurant";
-    const reportObj = {
-      id: `${type}-rep-${isRes ? restaurantId : riderId}-${historyStart}-${historyEnd}-${Date.now()}`,
-      entityId: isRes ? restaurantId : riderId,
-      entityName: isRes ? (selectedRestaurant?.name || "Restaurant") : (selectedRider?.name || "Rider"),
-      startDate: historyStart,
-      endDate: historyEnd,
-      savedAt: new Date().toISOString(),
-      rows: isRes ? historyRestaurantRows : historyRiderRows,
-      totals: isRes ? historyRestaurantTotals : historyRiderTotals,
-      type
-    };
-
+}, [orders, managementEntries, historyStart, historyEnd, riderId]);
+const historyRiderTotals = useMemo(() => {
+return historyRiderRows.reduce(
+(acc, row) => ({
+deliveredCount: acc.deliveredCount + row.deliveredCount,
+deliveredCod: acc.deliveredCod + row.deliveredCod,
+collection: acc.collection + row.collection,
+fine: acc.fine + row.fine,
+salary: acc.salary + row.salary,
+}),
+{ deliveredCount: 0, deliveredCod: 0, collection: 0, fine: 0, salary: 0 }
+);
+}, [historyRiderRows]);
+const saveEntityReportArchive = (type) => {
+const isRes = type === "restaurant";
+const reportObj = {
+id: `${type}-rep-${isRes ? restaurantId : riderId}-${historyStart}-${historyEnd}-${Date.now()}`,
+entityId: isRes ? restaurantId : riderId,
+entityName: isRes ? (selectedRestaurant?.name || "Restaurant") : (selectedRider?.name || "Rider"),
+startDate: historyStart,
+endDate: historyEnd,
+savedAt: new Date().toISOString(),
+rows: isRes ? historyRestaurantRows : historyRiderRows,
+totals: isRes ? historyRestaurantTotals : historyRiderTotals,
+type
+};
     setSavedEntityReports((prev) => [reportObj, ...prev.filter(r => !(r.type === type && r.entityId === (isRes ? restaurantId : riderId) && r.startDate === historyStart && r.endDate === historyEnd))]);
     setNotice({ type: "success", text: `${isRes ? "Restaurant" : "Rider"} report permanently saved!` });
-  };
-
-  const deleteSavedEntityReport = (id) => {
-    setDeleteModalData({
-      title: "Delete Saved Report",
-      message: "Are you sure you want to delete this saved report? This action cannot be undone.",
-      onConfirm: () => {
-        setSavedEntityReports((prev) => prev.filter(r => r.id !== id));
-        setNotice({ type: "success", text: "Report deleted successfully." });
-      }
-    });
-  };
-
-  const historyRows = useMemo(() => {
-    const rows = new Map();
-    const ensure = (key) => {
-      if (!rows.has(key)) {
-        rows.set(key, {
-          date: key,
-          sales: 0,
-          collection: 0,
-          cod: 0,
-          fine: 0,
-          salary: 0,
-          bkash: 0,
-          nagad: 0,
-        });
-      }
-      return rows.get(key);
-    };
-
+};
+const deleteSavedEntityReport = (id) => {
+setDeleteModalData({
+title: "Delete Saved Report",
+message: "Are you sure you want to delete this saved report? This action cannot be undone.",
+onConfirm: () => {
+setSavedEntityReports((prev) => prev.filter(r => r.id !== id));
+setNotice({ type: "success", text: "Report deleted successfully." });
+}
+});
+};
+const historyRows = useMemo(() => {
+const rows = new Map();
+const ensure = (key) => {
+if (!rows.has(key)) {
+rows.set(key, {
+date: key,
+sales: 0,
+collection: 0,
+cod: 0,
+fine: 0,
+salary: 0,
+bkash: 0,
+nagad: 0,
+});
+}
+return rows.get(key);
+};
     orders.forEach((order) => {
       const key = dateKey(order.createdAt);
       if (!key || key < historyStart || key > historyEnd) return;
@@ -1004,154 +979,147 @@ function App() {
     });
 
     return [...rows.values()].sort((a, b) => a.date.localeCompare(b.date));
-  }, [
-    orders,
-    managementEntries,
-    onlineEntries,
-    historyStart,
-    historyEnd,
-    historyType,
-    selectedRestaurant,
-    restaurantId,
-    riderId,
-  ]);
-
-  const historyTotals = historyRows.reduce(
-    (total, row) => ({
-      sales: total.sales + row.sales,
-      collection: total.collection + row.collection,
-      cod: total.cod + row.cod,
-      fine: total.fine + row.fine,
-      salary: total.salary + row.salary,
-      bkash: total.bkash + row.bkash,
-      nagad: total.nagad + row.nagad,
-    }),
-    { sales: 0, collection: 0, cod: 0, fine: 0, salary: 0, bkash: 0, nagad: 0 }
-  );
-
-  async function saveOnlineEntry(event) {
-    event.preventDefault();
-    if (!onlineAmount || Number(onlineAmount) < 0) {
-      setNotice({ type: "error", text: "Sothik amount din." });
-      return;
-    }
-    setSaving(true);
-    try {
-      await addDoc(collection(db, COLLECTIONS.online), {
-        method: onlineMethod,
-        amount: Number(onlineAmount),
-        note: onlineNote.trim(),
-        date: selectedDate,
-        createdAt: serverTimestamp(),
-      });
-      setOnlineAmount("");
-      setOnlineNote("");
-      setNotice({ type: "success", text: `${onlineMethod} entry saved.` });
-    } catch (error) {
-      setNotice({ type: "error", text: `Save failed: ${error.message}` });
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const navItems = [
-    ["overview", "Overview", "◫"],
-    ["restaurants", "Restaurants", "▤"],
-    ["delivery-charge", "Delivery Charge", "৳"],
-    ["riders", "Riders", "♧"],
-    ["online", "Online Accounts", "৳"],
-    ["history", "History & Reports", "▦"],
-    ["bulk", "Bulk Management", "⚙"],
-    ["paperwork", "Paper Work", "📄"],
-  ];
-
-  if (!authReady) {
-    return <div className="boot-screen"><div className="loader" /><p>Connecting to Firebase…</p></div>;
-  }
-
-  if (!user) {
-    return (
-      <>
-        <style>{styles}</style>
-        <div className="login-page">
-          <div className="login-glow login-glow-one" />
-          <div className="login-glow login-glow-two" />
-          <main className="login-card">
-            <div className="login-brand-mark"><FoodishLogo size={36} /></div>
-            <div className="login-brand-name">Foodish <span>Admin</span></div>
-            <div className="login-kicker">ACCOUNTS & OPERATIONS CONSOLE</div>
-            <div className="login-divider" />
-            <h1>Welcome back</h1>
-            <p className="login-description">Apnar Foodish Admin account diye login korun.</p>
-            {authError && (
-              <div className="login-error" role="alert">
-                <strong>Login failed</strong>
-                <span>{authError}</span>
-              </div>
-            )}
-            <button className="google-login-button" onClick={handleGoogleLogin}>
-              <span className="google-g" aria-hidden="true">G</span>
-              <span>Continue with Google</span>
-              <span className="google-arrow" aria-hidden="true">→</span>
-            </button>
-            <div className="login-security">
-              <span className="security-dot" /> Secure access for authorized administrators only
-            </div>
-          </main>
-          <footer className="login-footer">© {new Date().getFullYear()} Foodish · Internal use only</footer>
-        </div>
-      </>
-    );
-  }
-
-  const historySavedEntries = historyType === "rider"
-    ? [
-        ...managementEntries.filter((entry) => {
-          const d = dateKey(entry.date || entry.createdAt);
-          return d >= historyStart && d <= historyEnd && entry.entityType === "rider" && String(entry.entityId) === String(riderId);
-        }),
-        ...orders.filter((order) => {
-          const d = dateKey(order.createdAt);
-          return d >= historyStart && d <= historyEnd && String(order.riderId || "") === String(riderId) && isDelivered(order) && isCOD(order);
-        }).map((order) => ({
-          id: `cod-${order.id}`,
-          createdAt: order.createdAt,
-          date: dateKey(order.createdAt),
-          entityName: "COD Amount",
-          type: "COD",
-          note: `Order #${order.orderId || order.id}`,
-          amount: orderAmount(order),
-          readOnly: true,
-        })),
-      ]
-    : (historyType === "online" ? onlineEntries : managementEntries).filter((entry) => {
-        const d = dateKey(entry.date || entry.createdAt);
-        return d >= historyStart && d <= historyEnd && (historyType === "online" ? true : entry.entityType === historyType && String(entry.entityId) === String(restaurantId));
-      });
-
-  return (
-    <div className="app-shell">
-      <style>{styles}</style>
-      {sidebarOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
-      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
-        <div className="brand">
-          <div className="brand-mark"><FoodishLogo size={24} /></div>
-          <div><strong>Foodish</strong><small>ACCOUNTS CONSOLE</small></div>
-        </div>
-        <div className="side-label">WORKSPACE</div>
-        <nav>
-          {navItems.map(([id, label, icon]) => (
-            <button key={id} className={`nav-link ${page === id ? "active" : ""}`} onClick={() => { setPage(id); setSidebarOpen(false); }}>
-              <span className="nav-icon">{icon}</span><span>{label}</span>
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <span className="online-dot" /> Firebase connected
-          <small>{user?.email}</small><button className="nav-link" onClick={() => signOut(auth)}>Sign out</button>
-        </div>
-      </aside>
-
+}, [
+orders,
+managementEntries,
+onlineEntries,
+historyStart,
+historyEnd,
+historyType,
+selectedRestaurant,
+restaurantId,
+riderId,
+]);
+const historyTotals = historyRows.reduce(
+(total, row) => ({
+sales: total.sales + row.sales,
+collection: total.collection + row.collection,
+cod: total.cod + row.cod,
+fine: total.fine + row.fine,
+salary: total.salary + row.salary,
+bkash: total.bkash + row.bkash,
+nagad: total.nagad + row.nagad,
+}),
+{ sales: 0, collection: 0, cod: 0, fine: 0, salary: 0, bkash: 0, nagad: 0 }
+);
+async function saveOnlineEntry(event) {
+event.preventDefault();
+if (!onlineAmount || Number(onlineAmount) < 0) {
+setNotice({ type: "error", text: "Sothik amount din." });
+return;
+}
+setSaving(true);
+try {
+await addDoc(collection(db, COLLECTIONS.online), {
+method: onlineMethod,
+amount: Number(onlineAmount),
+note: onlineNote.trim(),
+date: selectedDate,
+createdAt: serverTimestamp(),
+});
+setOnlineAmount("");
+setOnlineNote("");
+setNotice({ type: "success", text: `${onlineMethod} entry saved.` });
+} catch (error) {
+setNotice({ type: "error", text: `Save failed: ${error.message}` });
+} finally {
+setSaving(false);
+}
+}
+const navItems = [
+["overview", "Overview", "◫"],
+["restaurants", "Restaurants", "▤"],
+["delivery-charge", "Delivery Charge", "৳"],
+["online-payment", "Online Payment", "💳"],
+["riders", "Riders", "♧"],
+["online", "Online Accounts", "৳"],
+["history", "History & Reports", "▦"],
+["bulk", "Bulk Management", "⚙"],
+["paperwork", "Paper Work", "📄"],
+];
+if (!authReady) {
+return <div className="boot-screen"><div className="loader" /><p>Connecting to Firebase…</p></div>;
+}
+if (!user) {
+return (
+<>
+<style>{styles}</style>
+<div className="login-page">
+<div className="login-glow login-glow-one" />
+<div className="login-glow login-glow-two" />
+<main className="login-card">
+<div className="login-brand-mark"><FoodishLogo size={36} /></div>
+<div className="login-brand-name">Foodish <span>Admin</span></div>
+<div className="login-kicker">ACCOUNTS & OPERATIONS CONSOLE</div>
+<div className="login-divider" />
+<h1>Welcome back</h1>
+<p className="login-description">Apnar Foodish Admin account diye login korun.</p>
+{authError && (
+<div className="login-error" role="alert">
+<strong>Login failed</strong>
+<span>{authError}</span>
+</div>
+)}
+<button className="google-login-button" onClick={handleGoogleLogin}>
+<span className="google-g" aria-hidden="true">G</span>
+<span>Continue with Google</span>
+<span className="google-arrow" aria-hidden="true">→</span>
+</button>
+<div className="login-security">
+<span className="security-dot" /> Secure access for authorized administrators only
+</div>
+</main>
+<footer className="login-footer">© {new Date().getFullYear()} Foodish · Internal use only</footer>
+</div>
+</>
+);
+}
+const historySavedEntries = historyType === "rider"
+? [
+...managementEntries.filter((entry) => {
+const d = dateKey(entry.date || entry.createdAt);
+return d >= historyStart && d <= historyEnd && entry.entityType === "rider" && String(entry.entityId) === String(riderId);
+}),
+...orders.filter((order) => {
+const d = dateKey(order.createdAt);
+return d >= historyStart && d <= historyEnd && String(order.riderId || "") === String(riderId) && isDelivered(order) && isCOD(order);
+}).map((order) => ({
+id: `cod-${order.id}`,
+createdAt: order.createdAt,
+date: dateKey(order.createdAt),
+entityName: "COD Amount",
+type: "COD",
+note: `Order #${order.orderId || order.id}`,
+amount: orderAmount(order),
+readOnly: true,
+})),
+]
+: (historyType === "online" ? onlineEntries : managementEntries).filter((entry) => {
+const d = dateKey(entry.date || entry.createdAt);
+return d >= historyStart && d <= historyEnd && (historyType === "online" ? true : entry.entityType === historyType && String(entry.entityId) === String(restaurantId));
+});
+return (
+<div className="app-shell">
+<style>{styles}</style>
+{sidebarOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
+<aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+<div className="brand">
+<div className="brand-mark"><FoodishLogo size={24} /></div>
+<div><strong>Foodish</strong><small>ACCOUNTS CONSOLE</small></div>
+</div>
+<div className="side-label">WORKSPACE</div>
+<nav>
+{navItems.map(([id, label, icon]) => (
+<button key={id} className={`nav-link ${page === id ? "active" : ""}`} onClick={() => { setPage(id); setSidebarOpen(false); }}>
+<span className="nav-icon">{icon}</span><span>{label}</span>
+</button>
+))}
+</nav>
+<div className="sidebar-bottom">
+<span className="online-dot" /> Firebase connected
+<small>{user?.email}</small><button className="nav-link" onClick={() => signOut(auth)}>Sign out</button>
+</div>
+</aside>
       <main className="main-area">
         <header className="topbar">
           <div>
@@ -1233,7 +1201,7 @@ function App() {
                       <th>Restaurant(s)</th>
                       <th>Rider Info</th>
                       <th>Time</th>
-                      <th>Payment</th>
+                      <th>Payment & Note</th>
                       <th>Status</th>
                       <th className="right">Total</th>
                     </tr>
@@ -1244,6 +1212,7 @@ function App() {
                       const riderDisplayName = matchedRider ? (matchedRider.name || matchedRider.id) : (order.riderName || "—");
                       const riderPhoneNum = matchedRider ? (matchedRider.phone || "") : (order.riderPhone || "");
                       const restNames = getOrderRestaurants(order.items);
+                      const orderNote = order.note || order.orderNote || order.instructions || "";
 
                       const borderColors = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
                       const cardBorderColor = borderColors[idx % borderColors.length];
@@ -1269,7 +1238,16 @@ function App() {
                             </div>
                           </td>
                           <td data-label="Time">{formatDateTime(order.createdAt)}</td>
-                          <td data-label="Payment">{order.payment || order.paymentMethod || "—"}</td>
+                          <td data-label="Payment & Note">
+                            <div className="card-value-block">
+                              <span>{order.payment || order.paymentMethod || "—"}</span>
+                              {orderNote && (
+                                <div style={{ marginTop: "8px", padding: "8px 12px", background: "#fef2f2", border: "2px solid #ef4444", borderRadius: "8px", color: "#dc2626", fontWeight: "900", fontSize: "14px", lineHeight: "1.4" }}>
+                                  ⚠️ Note: {orderNote}
+                                </div>
+                              )}
+                            </div>
+                          </td>
                           <td data-label="Status">
                             <span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>
                               {order.orderStatus || "Pending"}
@@ -1286,6 +1264,129 @@ function App() {
                     )}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* --- NEW ONLINE PAYMENT PAGE --- */}
+        {page === "online-payment" && (
+          <section className="content">
+            <div className="section-heading print-hide">
+              <div>
+                <h2>Online Payment Orders Report</h2>
+                <p>View bKash and Nagad payment records with customer details, payment amounts, timestamps, and PDF download option.</p>
+              </div>
+              <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+              </div>
+            </div>
+
+            <div className="panel print-hide">
+              <div className="filter-bar">
+                <label>
+                  Filter Date
+                  <input type="date" value={onlinePayDate} onChange={(e) => setOnlinePayDate(e.target.value)} />
+                </label>
+                <label>
+                  Payment Method
+                  <select value={onlinePayMethodFilter} onChange={(e) => setOnlinePayMethodFilter(e.target.value)}>
+                    <option value="all">All Online Methods</option>
+                    <option value="bkash">bKash Only</option>
+                    <option value="nagad">Nagad Only</option>
+                  </select>
+                </label>
+                <label style={{ flex: 2 }}>
+                  Search (Order ID, Customer Phone, Name)
+                  <input
+                    type="text"
+                    value={onlinePaySearch}
+                    onChange={(e) => setOnlinePaySearch(e.target.value)}
+                    placeholder="Search online orders..."
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="stats-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
+              <StatCard label="Total bKash Collection" value={money(onlinePaymentTotals.bkash)} hint={`bKash payments · ${onlinePayDate}`} icon="B" tone="pink" />
+              <StatCard label="Total Nagad Collection" value={money(onlinePaymentTotals.nagad)} hint={`Nagad payments · ${onlinePayDate}`} icon="N" tone="orange" />
+              <StatCard label="Grand Online Total" value={money(onlinePaymentTotals.total)} hint={`Combined online payments · ${onlinePayDate}`} icon="৳" tone="green" />
+            </div>
+
+            <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
+              <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
+                <FoodishLogo size={360} />
+              </div>
+
+              <div className="print-header" style={{ textAlign: "center", marginBottom: "30px", position: "relative", zIndex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
+                  <FoodishLogo size={36} />
+                  <span style={{ fontSize: "28px", fontWeight: "900", letterSpacing: "2px", color: "#10b981" }}>FOODISH</span>
+                </div>
+                <h1 style={{ fontSize: "28px", fontWeight: "900", color: "#0f172a", margin: "0 0 8px", textTransform: "uppercase" }}>
+                  Online Payment Transactions Report
+                </h1>
+                <p style={{ fontSize: "15px", fontWeight: "700", color: "#475569", margin: 0 }}>
+                  Date: {onlinePayDate}
+                </p>
+              </div>
+
+              <div className="panel" style={{ border: 0, padding: 0, boxShadow: "none", position: "relative", zIndex: 1 }}>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Order ID</th>
+                        <th>Customer Name & Phone</th>
+                        <th style={{ minWidth: "130px" }}>Payment Method & Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {onlinePaymentOrders.map((order) => {
+                        const paymentMethodName = order.payment || order.paymentMethod || "Online";
+                        return (
+                          <tr key={order.id}>
+                            <td>{formatDateTime(order.createdAt)}</td>
+                            <td><strong>#{order.orderId || order.id.slice(0, 8)}</strong></td>
+                            <td>
+                              <div><strong>{order.userName || "—"}</strong></div>
+                              <small className="cell-sub" style={{ color: "#2563eb", fontWeight: "700" }}>{order.userPhone || "No Phone"}</small>
+                            </td>
+                            <td style={{ minWidth: "130px" }}>
+                              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "7px" }}>
+                                <span className={`status ${normalized(paymentMethodName).includes("bkash") ? "good" : "pending"}`} style={{ textTransform: "uppercase" }}>
+                                  {paymentMethodName}
+                                </span>
+                                <strong style={{ color: "#047857", fontSize: "14px" }}>
+                                  {money(orderAmount(order))}
+                                </strong>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {onlinePaymentOrders.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="empty-cell">No online payment orders found for {onlinePayDate}.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                    {onlinePaymentOrders.length > 0 && (
+                      <tfoot>
+                        <tr>
+                          <th colSpan={3}>Total Online Collection</th>
+                          <th className="right">{money(onlinePaymentTotals.total)}</th>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              </div>
+
+              <div style={{ marginTop: "30px", display: "flex", justifyContent: "flex-end", position: "relative", zIndex: 1 }} className="print-hide">
+                <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
               </div>
             </div>
           </section>
@@ -1572,7 +1673,7 @@ function App() {
               <div>
                 <div className="eyebrow" style={{ marginBottom: 8 }}>RESTAURANT SETTINGS / DELIVERY</div>
                 <h2>Restaurant delivery charge</h2>
-                <p>Manage an additional delivery charge for each restaurant. Changes sync to the customer checkout configuration[cite: 1].</p>
+                <p>Manage an additional delivery charge for each restaurant. Changes sync to the customer checkout configuration.</p>
               </div>
               <span className="date-label">Live Firestore settings</span>
             </div>
@@ -1590,7 +1691,7 @@ function App() {
                   <span style={{ fontSize: 11, letterSpacing: 1.4, fontWeight: 800, color: "#b8d8d1" }}>PER-RESTAURANT CONFIGURATION</span>
                 </div>
                 <h3 style={{ margin: 0, font: "800 21px 'Plus Jakarta Sans'" }}>Set hidden delivery charge</h3>
-                <p style={{ margin: "7px 0 0", color: "#d0e2e0", fontSize: 12, lineHeight: 1.6 }}>Choose a restaurant and set its additional delivery amount in BDT. The value is stored directly in its `mini_restaurants` document[cite: 1].</p>
+                <p style={{ margin: "7px 0 0", color: "#d0e2e0", fontSize: 12, lineHeight: 1.6 }}>Choose a restaurant and set its additional delivery amount in BDT. The value is stored directly in its `mini_restaurants` document.</p>
               </div>
 
               <form onSubmit={saveHiddenDeliveryCharge} style={{ padding: 24 }}>
@@ -1768,7 +1869,7 @@ function App() {
               <div className="panel-head">
                 <div>
                   <h3>Restaurant Orders ({restaurantPageOrders.length})</h3>
-                  <p>Detailed breakdown including rider info and product items</p>
+                  <p>Detailed breakdown including rider info and only products from {selectedRestaurant?.name || "this restaurant"}</p>
                 </div>
               </div>
 
@@ -1778,9 +1879,9 @@ function App() {
                     <tr>
                       <th>Order ID</th>
                       <th>Customer</th>
-                      <th>Product Details (Items)</th>
+                      <th>Product Details (Selected Items Only)</th>
                       <th>Rider Details</th>
-                      <th>Time</th>
+                      <th>Time & Note</th>
                       <th>Status</th>
                       <th className="right">Item Subtotal</th>
                     </tr>
@@ -1790,6 +1891,7 @@ function App() {
                       const matchedRider = riders.find((r) => String(r.id) === String(order.riderId));
                       const riderName = matchedRider ? (matchedRider.name || matchedRider.id) : (order.riderName || "—");
                       const riderPhone = matchedRider ? (matchedRider.phone || "N/A") : (order.riderPhone || "N/A");
+                      const orderNote = order.note || order.orderNote || order.instructions || "";
 
                       const borderColors = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
                       const cardBorderColor = borderColors[idx % borderColors.length];
@@ -1824,7 +1926,16 @@ function App() {
                               <small className="cell-sub">Phone: {riderPhone}</small>
                             </div>
                           </td>
-                          <td data-label="Time">{formatDateTime(order.createdAt)}</td>
+                          <td data-label="Time & Note">
+                            <div className="card-value-block">
+                              <span>{formatDateTime(order.createdAt)}</span>
+                              {orderNote && (
+                                <div style={{ marginTop: "8px", padding: "8px 12px", background: "#fef2f2", border: "2px solid #ef4444", borderRadius: "8px", color: "#dc2626", fontWeight: "900", fontSize: "14px", lineHeight: "1.4" }}>
+                                  ⚠️ Note: {orderNote}
+                                </div>
+                              )}
+                            </div>
+                          </td>
                           <td data-label="Status">
                             <span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>
                               {order.orderStatus || "Pending"}
@@ -1851,7 +1962,7 @@ function App() {
             <div className="section-heading">
               <div>
                 <h2>Rider accounts & Orders</h2>
-                <p>View rider-specific orders with product details, status filters, and editable COD, Fine & Salary boxes with separate note/edit buttons at the bottom.</p>
+                <p>View rider-specific orders with product details, status filters, and separate COD and Online delivered totals.</p>
               </div>
             </div>
 
@@ -1890,8 +2001,8 @@ function App() {
             </div>
 
             <div className="stats-grid orders-card-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
-              <StatCard label="Delivered Orders Total" value={money(riderPageStats.deliveredTotal)} hint={`Delivered orders · ${riderPageDate}`} icon="✓" tone="green" />
-              <StatCard label="Pending / On The Way" value={money(riderPageStats.pendingTotal)} hint={`Not delivered yet · ${riderPageDate}`} icon="⌛" tone="orange" />
+              <StatCard label="Delivered COD Total" value={money(riderPageStats.deliveredCod)} hint={`Delivered Cash on Delivery · ${riderPageDate}`} icon="৳" tone="green" />
+              <StatCard label="Delivered Online Total" value={money(riderPageStats.deliveredOnline)} hint={`Delivered Online Payment · ${riderPageDate}`} icon="💳" tone="blue" />
               <StatCard label="Cancelled Orders Total" value={money(riderPageStats.cancelledTotal)} hint={`Cancelled orders · ${riderPageDate}`} icon="×" tone="red" />
             </div>
 
@@ -2554,22 +2665,18 @@ function App() {
       {notice && <div className={`toast ${notice.type}`}><span>{notice.type === "success" ? "✓" : "!"}</span>{notice.text}</div>}
       {saving && <div className="saving-overlay"><div className="loader" /><strong>Saving your entry…</strong></div>}
     </div>
-  );
+);
 }
-
 function StatCard({ label, value, hint, icon, tone }) {
-  return <div className="stat-card"><div className={`stat-icon ${tone}`}>{icon}</div><div className="stat-label">{label}</div><div className="stat-value">{value}</div><div className="stat-hint">{hint}</div></div>;
+return <div className="stat-card"><div className={`stat-icon ${tone}`}>{icon}</div><div className="stat-label">{label}</div><div className="stat-value">{value}</div><div className="stat-hint">{hint}</div></div>;
 }
-
 function EmptyRow({ colSpan = 6 }) {
-  return <tr><td colSpan={colSpan} className="empty-cell">No records found for this selection.</td></tr>;
+return <tr><td colSpan={colSpan} className="empty-cell">No records found for this selection.</td></tr>;
 }
-
 function EntryTable({ entries, onDelete, showMethod = false }) {
-  const sorted = [...entries].sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
-  return <div className="table-wrap"><table><thead><tr><th>Date / Time</th>{showMethod && <th>Method</th>}<th>Account / Type</th><th>Note</th><th className="right">Amount</th><th /></tr></thead><tbody>{sorted.map((entry) => <tr key={entry.id}><td>{formatDateTime(entry.createdAt || entry.date)}</td>{showMethod && <td>{entry.method || "—"}</td>}<td>{entry.entityName || entry.type || "—"}</td><td className="note-cell">{entry.note || "—"}</td><td className="right">{money(entry.amount)}</td><td>{!entry.readOnly && <button type="button" className="delete-btn" title="Delete entry" onClick={() => onDelete(entry.id)}>Delete</button>}</td></tr>)}{!sorted.length && <EmptyRow colSpan={showMethod ? 6 : 5} />}</tbody></table></div>;
+const sorted = [...entries].sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
+return <div className="table-wrap"><table><thead><tr><th>Date / Time</th>{showMethod && <th>Method</th>}<th>Account / Type</th><th>Note</th><th className="right">Amount</th><th /></tr></thead><tbody>{sorted.map((entry) => <tr key={entry.id}><td>{formatDateTime(entry.createdAt || entry.date)}</td>{showMethod && <td>{entry.method || "—"}</td>}<td>{entry.entityName || entry.type || "—"}</td><td className="note-cell">{entry.note || "—"}</td><td className="right">{money(entry.amount)}</td><td>{!entry.readOnly && <button type="button" className="delete-btn" title="Delete entry" onClick={() => onDelete(entry.id)}>Delete</button>}</td></tr>)}{!sorted.length && <EmptyRow colSpan={showMethod ? 6 : 5} />}</tbody></table></div>;
 }
-
 const styles = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
 :root{font-family:'DM Sans',sans-serif;color:#172033;background:#f5f7fb;font-synthesis:none}
@@ -2592,7 +2699,6 @@ const styles = `
 .login-security{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:22px;color:#96a2b1;font-size:10px}
 .security-dot{width:7px;height:7px;border-radius:50%;background:#20b77a;box-shadow:0 0 0 4px #e5f8ef}
 .login-footer{position:absolute;bottom:18px;left:12px;right:12px;text-align:center;color:#a1adba;font-size:10px}
-
 /* Bulk management extra styles */
 .bulk-action-panel { background: #fafbfc; border: 1px solid #e1e7ef; }
 .bulk-actions-btns { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -2607,130 +2713,130 @@ const styles = `
 .restaurant-checkbox-card:hover { border-color: #cbd5e1; background: #f8fafc; }
 .restaurant-checkbox-card.selected { border-color: #17a873; background: #f0fdf4; box-shadow: 0 0 0 1px #17a873; }
 .restaurant-checkbox-card span { font-weight: 800; font-size: 14px; color: #0f172a; }
-
 /* Universal Box Card View - Fully Responsive & Non-overflowing */
 .universal-card-list table, .universal-card-list thead, .universal-card-list tbody, .universal-card-list th, .universal-card-list td, .universal-card-list tr {
-  display: block;
-  width: 100%;
+display: block;
+width: 100%;
 }
 .universal-card-list thead tr {
-  position: absolute;
-  top: -9999px;
-  left: -9999px;
+position: absolute;
+top: -9999px;
+left: -9999px;
 }
 .universal-card-list tr {
-  background: #ffffff;
-  border: 2px solid var(--card-border-color, #3b82f6);
-  border-radius: 14px;
-  margin-bottom: 16px;
-  padding: 16px;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.05);
+background: #ffffff;
+border: 2px solid var(--card-border-color, #3b82f6);
+border-radius: 14px;
+margin-bottom: 16px;
+padding: 16px;
+box-shadow: 0 4px 14px rgba(0,0,0,0.05);
 }
 .universal-card-list td {
-  border: none;
-  position: relative;
-  padding: 8px 0;
-  text-align: left;
-  font-size: 14px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  border-bottom: 1px solid #f1f5f9;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+border: none;
+position: relative;
+padding: 8px 0;
+text-align: left;
+font-size: 14px;
+display: flex;
+flex-direction: column;
+align-items: flex-start;
+border-bottom: 1px solid #f1f5f9;
+overflow-wrap: anywhere;
+word-break: break-word;
 }
 .universal-card-list td:last-child {
-  border-bottom: none;
+border-bottom: none;
 }
 .universal-card-list td::before {
-  content: attr(data-label);
-  font-weight: 800;
-  text-transform: uppercase;
-  color: #64748b;
-  font-size: 11px;
-  margin-bottom: 3px;
-  letter-spacing: 0.5px;
+content: attr(data-label);
+font-weight: 800;
+text-transform: uppercase;
+color: #64748b;
+font-size: 11px;
+margin-bottom: 3px;
+letter-spacing: 0.5px;
 }
 .universal-card-list td.right {
-  text-align: left;
+text-align: left;
 }
 .card-value-block {
-  width: 100%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+width: 100%;
+overflow-wrap: anywhere;
+word-break: break-word;
 }
-
 /* Orders Grid in Stats Header */
 .orders-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 15px;
+display: grid;
+grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+gap: 15px;
 }
-
 /* Print Styles: Hide browser default headers/footers and show custom watermark & brand */
 @media print {
-  @page {
-    size: auto;
-    margin: 10mm;
-  }
-  .print-hide, .sidebar, .topbar, .footer {
-    display: none !important;
-  }
-  .app-shell, .main-area {
-    margin: 0 !important;
-    width: 100% !important;
-    background: #fff !important;
-  }
-  .content {
-    padding: 0 !important;
-    max-width: 100% !important;
-  }
-  .panel {
-    border: none !important;
-    box-shadow: none !important;
-    padding: 0 !important;
-    margin-bottom: 20px !important;
-    background: transparent !important;
-  }
-  .printable-report-area, .history-print-box {
-    width: 100% !important;
-    max-width: 100% !important;
-    padding: 20px !important;
-    margin: 0 !important;
-    border: none !important;
-    position: relative !important;
-    background: #fff !important;
-  }
-  .pdf-watermark-logo {
-    display: block !important;
-  }
-  table {
-    width: 100% !important;
-    overflow: visible !important;
-  }
-  table th {
-    font-size: 13px !important;
-    font-weight: 900 !important;
-    color: #000 !important;
-    background: #f1f5f9 !important;
-    padding: 10px !important;
-  }
-  table td {
-    font-size: 13px !important;
-    font-weight: 700 !important;
-    color: #000 !important;
-    padding: 10px !important;
-  }
-  .print-only-header {
-    display: block !important;
-  }
+@page {
+size: A4 portrait;
+margin: 5mm;
 }
-
+body {
+-webkit-print-color-adjust: exact;
+print-color-adjust: exact;
+}
+.print-hide, .sidebar, .topbar, .footer {
+display: none !important;
+}
+.app-shell, .main-area {
+margin: 0 !important;
+width: 100% !important;
+background: #fff !important;
+}
+.content {
+padding: 0 !important;
+max-width: 100% !important;
+}
+.panel {
+border: none !important;
+box-shadow: none !important;
+padding: 0 !important;
+margin-bottom: 10px !important;
+background: transparent !important;
+}
+.printable-report-area, .history-print-box {
+width: 100% !important;
+max-width: 100% !important;
+padding: 5px !important;
+margin: 0 !important;
+border: none !important;
+position: relative !important;
+background: #fff !important;
+}
+.pdf-watermark-logo {
+display: block !important;
+}
+table {
+width: 100% !important;
+table-layout: auto !important;
+border-collapse: collapse !important;
+overflow: visible !important;
+font-size: 10px !important;
+}
+table th, table td {
+font-size: 10px !important;
+padding: 4px 6px !important;
+white-space: nowrap !important;
+}
+.printable-report-area table td:nth-child(4) {
+white-space: normal !important;
+}
+tr {
+page-break-inside: avoid !important;
+}
+.print-only-header {
+display: block !important;
+}
+}
 @media(max-width:520px){.login-page{padding:22px 14px 58px}.login-card{padding:37px 24px 29px;border-radius:20px}.login-card h1{font-size:24px}.login-brand-name{font-size:23px}.login-description{font-size:12px}}
 @media(max-width:1000px){.sidebar{width:210px}.main-area{margin-left:210px;width:calc(100% - 210px)}.content{padding:24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.sidebar{width:270px;max-width:82vw;padding:22px 17px;transform:translateX(-105%);transition:transform .32s cubic-bezier(.2,.8,.2,1);box-shadow:18px 0 50px #101b2e24}.sidebar.sidebar-open{transform:translateX(0)}.brand{padding:0 8px 30px}.brand>div:last-child,.side-label,.nav-link span:last-child,.sidebar-bottom{display:block}.nav-link{justify-content:flex-start;padding:14px 12px;min-height:46px}.main-area{margin-left:0;width:100%}.topbar{height:72px;padding:0 14px 0 58px;position:sticky}.mobile-menu-btn{display:grid;place-items:center;position:absolute;left:13px;top:18px;width:34px;height:34px;border:1px solid #e7edf2;border-radius:9px;background:#fff;color:#26364b;font-size:18px;cursor:pointer}.sidebar-scrim{display:block;position:fixed;inset:0;background:#0d1728a6;border:0;z-index:4;backdrop-filter:blur(2px)}.topbar h1{font-size:18px}.content{padding:20px 14px 30px}.section-heading{align-items:start;gap:10px;flex-direction:column}.section-heading h2{font-size:19px}.stats-grid,.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.stat-card{padding:15px;min-height:130px;border-radius:15px}.stat-icon{width:38px;height:38px}.stat-value{font-size:clamp(18px,5vw,23px)}.stat-label{font-size:11px}.stat-hint{font-size:10px;line-height:1.45}.panel{padding:15px;border-radius:14px}.filter-bar{padding:13px;gap:12px}.filter-bar label{flex:1 1 100%;min-width:0;font-size:11px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:44px;font-size:14px}.entry-form{display:grid;grid-template-columns:1fr;gap:13px}.entry-form label,.entry-form .note-field{min-width:0}.entry-form label{font-size:11px}.entry-form .primary-btn{width:100%;height:46px;font-size:13px}.primary-btn,.delete-btn{min-height:40px}.table-wrap{border-radius:9px}th{font-size:10px;padding:13px 12px}td{font-size:12px;padding:14px 12px}.date-label{font-size:11px}.alert{margin:12px 13px 0}.today-chip{font-size:10px;padding:8px}.avatar{width:34px;height:34px}.footer{padding-bottom:30px}}
 @media(min-width:681px){.mobile-menu-btn,.sidebar-scrim{distance:none}}
 @media(max-width:380px){.stats-grid,.stats-grid.two{grid-template-columns:1fr}.stat-card{min-height:unset}.topbar-right{gap:8px}.today-chip{display:none}}
 `;
-
 export default App;
