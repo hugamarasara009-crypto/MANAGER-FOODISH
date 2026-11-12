@@ -29,6 +29,7 @@ const COLLECTIONS = {
   online: "online_entries",
   locations: "locations",
   paperworkReports: "paperwork_reports",
+  riderStatements: "rider_statements",
 };
 
 const money = (value) =>
@@ -251,6 +252,7 @@ function App() {
   const [onlineEntries, setOnlineEntries] = useState([]);
   const [locationsData, setLocationsData] = useState([]);
   const [firestorePaperReports, setFirestorePaperReports] = useState([]);
+  const [firestoreRiderStatements, setFirestoreRiderStatements] = useState([]);
   const [page, setPage] = useState("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [restaurantId, setRestaurantId] = useState("");
@@ -271,6 +273,14 @@ function App() {
   const [riderPageSearch, setRiderPageSearch] = useState("");
   const [riderSummaryStart, setRiderSummaryStart] = useState(todayKey());
   const [riderSummaryEnd, setRiderSummaryEnd] = useState(todayKey());
+
+  // Rider Summary Adjustment (Plus / Minus / Fine) & Permanent Statement States
+  const [adjAmountInput, setAdjAmountInput] = useState("");
+  const [adjNoteInput, setAdjNoteInput] = useState("");
+  const [fineAmountInput, setFineAmountInput] = useState("");
+  const [fineNoteInput, setFineNoteInput] = useState("");
+  const [riderAdjustments, setRiderAdjustments] = useState([]);
+  const [activeSavedRiderStatement, setActiveSavedRiderStatement] = useState(null);
 
   // Check-In Page States
   const [checkInDate, setCheckInDate] = useState(todayKey());
@@ -305,6 +315,16 @@ function App() {
       console.error(e);
     }
   }, [savedEntityReports]);
+
+  // Reset adjustments when rider or date range changes
+  useEffect(() => {
+    setRiderAdjustments([]);
+    setAdjAmountInput("");
+    setAdjNoteInput("");
+    setFineAmountInput("");
+    setFineNoteInput("");
+    setActiveSavedRiderStatement(null);
+  }, [riderId, riderSummaryStart, riderSummaryEnd]);
 
   const [selectedRestaurantIds, setSelectedRestaurantIds] = useState(() => {
     try {
@@ -433,6 +453,7 @@ function App() {
     subscribe(COLLECTIONS.online, setOnlineEntries, true);
     subscribe(COLLECTIONS.locations, setLocationsData, true);
     subscribe(COLLECTIONS.paperworkReports, setFirestorePaperReports, true);
+    subscribe(COLLECTIONS.riderStatements, setFirestoreRiderStatements, true);
 
     return () => unsubs.forEach((unsubscribe) => unsubscribe());
   }, [user]);
@@ -960,168 +981,208 @@ function App() {
     };
   }, [orders, selectedRider, riderPageDate]);
 
-  // RIDER DATE-RANGE SUMMARY COMPUTED DATA (From Date -> To Date, with Date-wise Rows + Notes)
+  // RIDER DATE-RANGE SUMMARY COMPUTED DATA (Only Total COD Cash Amount + Date-Wise Order Notes)
   const riderRangeSummary = useMemo(() => {
     if (!selectedRider || !riderSummaryStart || !riderSummaryEnd) {
       return {
         deliveredCod: 0,
-        deliveredOnline: 0,
-        deliveredTotal: 0,
-        totalCharge: 0,
-        cancelledTotal: 0,
         deliveredCount: 0,
-        collection: 0,
-        bkash: 0,
-        nagad: 0,
-        fine: 0,
-        salary: 0,
-        payment: 0,
-        dailyRows: [],
-        notes: [],
+        orderNotesList: [],
       };
     }
 
-    const dailyMap = new Map();
-    let curr = new Date(riderSummaryStart);
-    const end = new Date(riderSummaryEnd);
-    if (!Number.isNaN(curr.getTime()) && !Number.isNaN(end.getTime()) && curr <= end) {
-      while (curr <= end) {
-        const k = dateKey(curr);
-        dailyMap.set(k, {
-          date: k,
-          deliveredCount: 0,
-          deliveredCod: 0,
-          deliveredOnline: 0,
-          deliveredTotal: 0,
-          totalOrdersAmt: 0,
-          totalProductAmt: 0,
-          totalCharge: 0,
-          cancelledTotal: 0,
-          collection: 0,
-          bkash: 0,
-          nagad: 0,
-          fine: 0,
-          salary: 0,
-          payment: 0,
-          checked: false,
-        });
-        curr.setDate(curr.getDate() + 1);
-      }
-    }
+    let deliveredCod = 0;
+    let deliveredCount = 0;
+    const orderNotesList = [];
 
     orders.forEach((order) => {
       const k = dateKey(order.createdAt);
       if (!k || k < riderSummaryStart || k > riderSummaryEnd) return;
       if (String(order.riderId || "") !== String(selectedRider.id)) return;
-      if (!dailyMap.has(k)) return;
 
-      const row = dailyMap.get(k);
       const amt = orderAmount(order);
-      const prodAmt = itemSubtotal(order.items);
 
-      if (isDelivered(order)) {
-        row.deliveredCount += 1;
-        row.totalOrdersAmt += amt;
-        row.totalProductAmt += prodAmt;
-        if (isCOD(order)) {
-          row.deliveredCod += amt;
-        } else {
-          row.deliveredOnline += amt;
-        }
-      } else if (isCancelled(order)) {
-        row.cancelledTotal += amt;
-      }
-    });
-
-    const collectedNotes = [];
-
-    managementEntries.forEach((entry) => {
-      if (entry.entityType !== "rider") return;
-      if (String(entry.entityId) !== String(selectedRider.id)) return;
-      const k = dateKey(entry.date || entry.createdAt);
-      if (!k || k < riderSummaryStart || k > riderSummaryEnd) return;
-
-      const t = normalized(entry.type);
-      const amt = Number(entry.amount || 0);
-
-      if (dailyMap.has(k)) {
-        const row = dailyMap.get(k);
-        if (t === "collection" || t === "physical") row.collection += amt;
-        if (t === "bkash") row.bkash += amt;
-        if (t === "nagad") row.nagad += amt;
-        if (t === "fine") row.fine += amt;
-        if (t === "salary") row.salary += amt;
-        if (t === "payment") row.payment += amt;
-        if (t === "rider_checked") row.checked = amt === 1;
+      if (isDelivered(order) && isCOD(order)) {
+        deliveredCount += 1;
+        deliveredCod += amt;
       }
 
-      if (entry.note && String(entry.note).trim() !== "") {
-        const labelMap = {
-          rider_note: "Daily Note",
-          collection: "Cash Collect Note",
-          physical: "Cash Collect Note",
-          bkash: "bKash Note",
-          nagad: "Nagad Note",
-          fine: "Fine Note",
-          salary: "Salary Note",
-          payment: "Payment Note",
-        };
-        collectedNotes.push({
-          id: entry.id,
+      // Collect order notes with date, orderId, status
+      const rawOrderNote = order.note || order.orderNote || order.instructions || "";
+      if (String(rawOrderNote).trim() !== "") {
+        orderNotesList.push({
+          id: order.id,
           date: k,
-          typeLabel: labelMap[t] || "Note",
-          note: String(entry.note).trim(),
+          createdAt: order.createdAt,
+          orderId: order.orderId || order.id.slice(0, 8),
+          status: order.orderStatus || "Pending",
+          isDelivered: isDelivered(order),
+          isCancelled: isCancelled(order),
+          note: String(rawOrderNote).trim(),
+          amount: amt,
         });
       }
     });
 
-    const dailyRows = Array.from(dailyMap.values())
-      .map((r) => ({
-        ...r,
-        deliveredTotal: r.deliveredCod + r.deliveredOnline,
-        totalCharge: Math.max(0, r.totalOrdersAmt - r.totalProductAmt),
-      }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-
-    collectedNotes.sort((a, b) => a.date.localeCompare(b.date));
-
-    const totals = dailyRows.reduce(
-      (acc, r) => ({
-        deliveredCod: acc.deliveredCod + r.deliveredCod,
-        deliveredOnline: acc.deliveredOnline + r.deliveredOnline,
-        deliveredTotal: acc.deliveredTotal + r.deliveredTotal,
-        totalCharge: acc.totalCharge + r.totalCharge,
-        cancelledTotal: acc.cancelledTotal + r.cancelledTotal,
-        deliveredCount: acc.deliveredCount + r.deliveredCount,
-        collection: acc.collection + r.collection,
-        bkash: acc.bkash + r.bkash,
-        nagad: acc.nagad + r.nagad,
-        fine: acc.fine + r.fine,
-        salary: acc.salary + r.salary,
-        payment: acc.payment + r.payment,
-      }),
-      {
-        deliveredCod: 0,
-        deliveredOnline: 0,
-        deliveredTotal: 0,
-        totalCharge: 0,
-        cancelledTotal: 0,
-        deliveredCount: 0,
-        collection: 0,
-        bkash: 0,
-        nagad: 0,
-        fine: 0,
-        salary: 0,
-        payment: 0,
-      }
+    orderNotesList.sort(
+      (a, b) =>
+        a.date.localeCompare(b.date) ||
+        (asDate(a.createdAt)?.getTime() || 0) - (asDate(b.createdAt)?.getTime() || 0)
     );
 
     return {
-      ...totals,
-      dailyRows,
-      notes: collectedNotes,
+      deliveredCod,
+      deliveredCount,
+      orderNotesList,
     };
-  }, [orders, managementEntries, selectedRider, riderSummaryStart, riderSummaryEnd]);
+  }, [orders, selectedRider, riderSummaryStart, riderSummaryEnd]);
+
+  // Add Plus / Minus / Fine adjustment row to Rider Summary
+  const handleAddRiderAdjustment = (type) => {
+    const isFine = type === "fine";
+    const rawVal = isFine ? fineAmountInput : adjAmountInput;
+    const rawNote = isFine ? fineNoteInput : adjNoteInput;
+    const numericVal = Number(rawVal);
+
+    if (!rawVal || !Number.isFinite(numericVal) || numericVal <= 0) {
+      setNotice({ type: "error", text: "Sothik amount din (0-er beshi)." });
+      return;
+    }
+
+    const newEntry = {
+      id: `adj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      type, // "plus" | "minus" | "fine"
+      amount: numericVal,
+      note: String(rawNote || "").trim() || (type === "plus" ? "Added (+)" : type === "minus" ? "Deducted (-)" : "Fine (-)"),
+      addedAt: new Date().toISOString(),
+    };
+
+    setRiderAdjustments((prev) => [...prev, newEntry]);
+    if (isFine) {
+      setFineAmountInput("");
+      setFineNoteInput("");
+    } else {
+      setAdjAmountInput("");
+      setAdjNoteInput("");
+    }
+    setNotice({
+      type: "success",
+      text: `${type === "plus" ? "+ Plus" : type === "minus" ? "- Minus" : "Fine"} (${money(numericVal)}) added!`,
+    });
+  };
+
+  const handleRemoveRiderAdjustment = (adjId) => {
+    setRiderAdjustments((prev) => prev.filter((item) => item.id !== adjId));
+  };
+
+  // Compute Total COD Cash Amount + Plus - Minus - Fine (No prior logic)
+  const riderSummaryCalculation = useMemo(() => {
+    const baseTotal = Number(riderRangeSummary.deliveredCod || 0);
+
+    let plusSum = 0;
+    let minusSum = 0;
+    let fineSum = 0;
+
+    riderAdjustments.forEach((adj) => {
+      if (adj.type === "plus") plusSum += Number(adj.amount || 0);
+      if (adj.type === "minus") minusSum += Number(adj.amount || 0);
+      if (adj.type === "fine") fineSum += Number(adj.amount || 0);
+    });
+
+    const netTotal = baseTotal + plusSum - minusSum - fineSum;
+
+    return {
+      baseTotal,
+      plusSum,
+      minusSum,
+      fineSum,
+      netTotal,
+    };
+  }, [riderRangeSummary, riderAdjustments]);
+
+  // Permanently Save Rider Statement to Firestore
+  async function saveRiderStatementToDatabase() {
+    if (!selectedRider) {
+      setNotice({ type: "error", text: "Rider select korun." });
+      return;
+    }
+    setSaving(true);
+    try {
+      const statementPayload = {
+        riderId: selectedRider.id,
+        riderName: selectedRider.name || selectedRider.id,
+        riderPhone: selectedRider.phone || "",
+        fromDate: riderSummaryStart,
+        toDate: riderSummaryEnd,
+        savedAt: new Date().toISOString(),
+        deliveredCount: riderRangeSummary.deliveredCount,
+        baseTotal: riderSummaryCalculation.baseTotal,
+        plusSum: riderSummaryCalculation.plusSum,
+        minusSum: riderSummaryCalculation.minusSum,
+        fineSum: riderSummaryCalculation.fineSum,
+        netTotal: riderSummaryCalculation.netTotal,
+        adjustments: JSON.parse(JSON.stringify(riderAdjustments)),
+        orderNotes: JSON.parse(JSON.stringify(riderRangeSummary.orderNotesList)),
+        locked: true,
+      };
+
+      const docRef = await addDoc(collection(db, COLLECTIONS.riderStatements), statementPayload);
+      setActiveSavedRiderStatement({ id: docRef.id, ...statementPayload });
+      setNotice({
+        type: "success",
+        text: `Statement permanently saved for ${selectedRider.name} (${riderSummaryStart} to ${riderSummaryEnd})!`,
+      });
+    } catch (error) {
+      setNotice({ type: "error", text: `Save failed: ${error.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const deleteSavedRiderStatement = (statementId) => {
+    setDeleteModalData({
+      title: "Delete Saved Rider Statement",
+      message: "Are you sure you want to permanently delete this saved rider statement?",
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, COLLECTIONS.riderStatements, statementId));
+          if (activeSavedRiderStatement?.id === statementId) {
+            setActiveSavedRiderStatement(null);
+          }
+          setNotice({ type: "success", text: "Saved rider statement deleted successfully." });
+        } catch (error) {
+          setNotice({ type: "error", text: `Delete failed: ${error.message}` });
+        }
+      },
+    });
+  };
+
+  const downloadRiderStatementCSV = (st) => {
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += `FOODISH RIDER STATEMENT\n`;
+    csvContent += `Rider Name:,"${st.riderName}"\n`;
+    csvContent += `Period:,${st.fromDate} to ${st.toDate}\n`;
+    csvContent += `Total COD Cash Amount:,${st.baseTotal}\n\n`;
+    csvContent += `SL,Type,Amount,Note\n`;
+    (st.adjustments || []).forEach((adj, idx) => {
+      const sign = adj.type === "plus" ? "+ Plus" : adj.type === "minus" ? "- Minus" : "Fine (-)";
+      csvContent += `${idx + 1},"${sign}",${adj.amount},"${(adj.note || "").replace(/"/g, '""')}"\n`;
+    });
+    csvContent += `\nNet Final COD Cash Total:,${st.netTotal}\n\n`;
+    csvContent += `ORDER NOTES LIST\n`;
+    csvContent += `SL,Date,Order ID,Status,Order Note\n`;
+    (st.orderNotes || []).forEach((n, idx) => {
+      csvContent += `${idx + 1},${n.date},"#${n.orderId}","${n.status}","${(n.note || "").replace(/"/g, '""')}"\n`;
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `rider_statement_${st.riderName}_${st.fromDate}_to_${st.toDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Online Payment Page Computed Data (bKash, Nagad, Rocket)
   const onlinePaymentOrders = useMemo(() => {
@@ -3094,7 +3155,7 @@ function App() {
               </>
             )}
 
-            {/* TAB 2: RIDER DATE-RANGE SUMMARY WITH PDF DOWNLOAD & DATE-WISE TABLE */}
+            {/* TAB 2: RIDER DATE-RANGE SUMMARY (ONLY TOTAL COD CASH BOX + PLUS/MINUS + SEPARATE FINE BOX + ORDER NOTES + PERMANENT SAVE) */}
             {riderTab === "summary" && (
               <>
                 <div className="filter-bar print-hide">
@@ -3123,261 +3184,578 @@ function App() {
                       onChange={(e) => setRiderSummaryEnd(e.target.value)}
                     />
                   </label>
-                  <div style={{ display: "flex", alignItems: "flex-end", height: "38px" }}>
+                  <div style={{ display: "flex", gap: "10px", alignItems: "flex-end", flexWrap: "wrap" }}>
                     <button
                       type="button"
                       className="primary-btn"
                       onClick={() => window.print()}
-                      style={{ height: "38px", padding: "0 18px", background: "#3b82f6" }}
+                      style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}
                     >
                       🖨️ Print / Download PDF
                     </button>
                   </div>
                 </div>
 
-                {/* PRINTABLE SUMMARY REPORT AREA */}
-                <div
-                  className="printable-report-area history-print-box"
-                  style={{
-                    background: "#ffffff",
-                    padding: "26px",
-                    borderRadius: "16px",
-                    border: "1px solid #e2e8f0",
-                    position: "relative",
-                  }}
-                >
-                  <div
-                    className="pdf-watermark-logo"
-                    style={{
-                      display: "none",
-                      position: "absolute",
-                      top: "50%",
-                      left: "50%",
-                      transform: "translate(-50%, -50%)",
-                      opacity: 0.05,
-                      pointerEvents: "none",
-                      zIndex: 0,
-                    }}
-                  >
-                    <FoodishLogo size={360} />
-                  </div>
-
-                  {/* PDF Header */}
-                  <div className="print-header" style={{ textAlign: "center", marginBottom: "24px", position: "relative", zIndex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
-                      <FoodishLogo size={34} />
-                      <span style={{ fontSize: "26px", fontWeight: "900", letterSpacing: "2px", color: "#10b981" }}>FOODISH</span>
-                    </div>
-                    <h1 style={{ fontSize: "26px", fontWeight: "900", color: "#0f172a", margin: "0 0 6px", textTransform: "uppercase" }}>
-                      {selectedRider?.name || "Rider"} — Summary Report
-                    </h1>
-                    <p style={{ fontSize: "14px", fontWeight: "700", color: "#475569", margin: 0 }}>
-                      From Date: {riderSummaryStart} To Date: {riderSummaryEnd} ({riderRangeSummary.deliveredCount} Delivered Orders)
-                    </p>
-                  </div>
-
-                  {/* Top Consolidated Summary Boxes */}
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-                      gap: "12px",
-                      marginBottom: "22px",
-                      position: "relative",
-                      zIndex: 1,
-                    }}
-                  >
-                    {[
-                      { label: "Delivered COD Total", val: riderRangeSummary.deliveredCod, border: "#10b981", bg: "#ecfdf5" },
-                      { label: "Delivered Online Total", val: riderRangeSummary.deliveredOnline, border: "#3b82f6", bg: "#eff6ff" },
-                      { label: "Total (COD + Online)", val: riderRangeSummary.deliveredTotal, border: "#8b5cf6", bg: "#f5f3ff" },
-                      { label: "Delivery Charge", val: riderRangeSummary.totalCharge, border: "#f59e0b", bg: "#fffbeb" },
-                      { label: "Cash Collect", val: riderRangeSummary.collection, border: "#10b981", bg: "#f0fdf4" },
-                      { label: "bKash", val: riderRangeSummary.bkash, border: "#ec4899", bg: "#fdf2f8" },
-                      { label: "Nagad", val: riderRangeSummary.nagad, border: "#f97316", bg: "#fff7ed" },
-                      { label: "Fine", val: riderRangeSummary.fine, border: "#ef4444", bg: "#fef2f2" },
-                      { label: "Salary", val: riderRangeSummary.salary, border: "#16a34a", bg: "#ecfdf5" },
-                      { label: "Payment", val: riderRangeSummary.payment, border: "#2563eb", bg: "#eff6ff" },
-                    ].map((box) => (
-                      <div
-                        key={box.label}
-                        style={{
-                          padding: "12px 14px",
-                          borderRadius: "10px",
-                          border: `2px solid ${box.border}`,
-                          background: box.bg,
-                        }}
-                      >
-                        <div style={{ fontSize: "11px", fontWeight: "800", color: "#334155", textTransform: "uppercase" }}>
-                          {box.label}
-                        </div>
-                        <div style={{ fontSize: "18px", fontWeight: "900", color: "#0f172a", marginTop: "4px" }}>
-                          {money(box.val)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* DATE-WISE FULL DETAILS TABLE */}
-                  <div className="panel" style={{ border: "1px solid #e2e8f0", padding: "16px", boxShadow: "none", position: "relative", zIndex: 1, marginBottom: "22px" }}>
-                    <div className="panel-head" style={{ marginBottom: "12px" }}>
+                {/* PERMANENTLY SAVED RIDER STATEMENTS ARCHIVE */}
+                {firestoreRiderStatements.length > 0 && (
+                  <div className="panel print-hide">
+                    <div className="panel-head">
                       <div>
-                        <h3>📅 Date-Wise Full Breakdown Table</h3>
-                        <p>All metrics from {riderSummaryStart} to {riderSummaryEnd}</p>
+                        <h3>🔒 Saved Rider Statements Archive (Permanent & Locked)</h3>
+                        <p>Once saved, statements cannot be modified. View, Print PDF, Download CSV, or Delete anytime.</p>
                       </div>
-                      <span className="count-pill">{riderRangeSummary.dailyRows.length} days</span>
+                      <span className="count-pill">{firestoreRiderStatements.length} saved</span>
                     </div>
 
                     <div className="table-wrap">
                       <table>
                         <thead>
                           <tr>
-                            <th>Date</th>
-                            <th>Deliv.</th>
-                            <th>COD</th>
-                            <th>Online</th>
-                            <th>Total</th>
-                            <th>Charge</th>
-                            <th>Cash</th>
-                            <th>bKash</th>
-                            <th>Nagad</th>
-                            <th>Fine</th>
-                            <th>Salary</th>
-                            <th>Payment</th>
-                            <th>Check</th>
+                            <th>Rider Name</th>
+                            <th>From Date → To Date</th>
+                            <th>Total COD Cash</th>
+                            <th>Net Total</th>
+                            <th>Saved At</th>
+                            <th className="right">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {riderRangeSummary.dailyRows.map((row) => (
-                            <tr key={row.date}>
-                              <td><strong>{row.date}</strong></td>
-                              <td>{row.deliveredCount}</td>
-                              <td>{money(row.deliveredCod)}</td>
-                              <td>{money(row.deliveredOnline)}</td>
-                              <td><strong>{money(row.deliveredTotal)}</strong></td>
-                              <td>{money(row.totalCharge)}</td>
-                              <td>{money(row.collection)}</td>
-                              <td>{money(row.bkash)}</td>
-                              <td>{money(row.nagad)}</td>
-                              <td>{money(row.fine)}</td>
-                              <td>{money(row.salary)}</td>
-                              <td>{money(row.payment)}</td>
-                              <td>
-                                <span
-                                  className={`status ${row.checked ? "good" : "pending"}`}
-                                >
-                                  {row.checked ? "✓ Yes" : "✕ No"}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                          {riderRangeSummary.dailyRows.length === 0 && (
-                            <tr>
-                              <td colSpan={13} className="empty-cell">No dates found in selected range.</td>
-                            </tr>
-                          )}
+                          {[...firestoreRiderStatements]
+                            .sort((a, b) => String(b.savedAt || "").localeCompare(String(a.savedAt || "")))
+                            .map((st) => (
+                              <tr key={st.id}>
+                                <td><strong>{st.riderName}</strong></td>
+                                <td>{st.fromDate} to {st.toDate}</td>
+                                <td><strong>{money(st.baseTotal)}</strong></td>
+                                <td>
+                                  <strong style={{ color: "#047857", fontSize: "15px" }}>
+                                    {money(st.netTotal)}
+                                  </strong>
+                                </td>
+                                <td>{formatDateTime(st.savedAt)}</td>
+                                <td className="right" style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                                  <button
+                                    type="button"
+                                    className="primary-btn"
+                                    style={{ height: "32px", padding: "0 12px", fontSize: "11px", background: "#059669" }}
+                                    onClick={() => setActiveSavedRiderStatement(st)}
+                                  >
+                                    👁️ View / Print
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="primary-btn"
+                                    style={{ height: "32px", padding: "0 12px", fontSize: "11px", background: "#2563eb" }}
+                                    onClick={() => downloadRiderStatementCSV(st)}
+                                  >
+                                    📥 CSV
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="delete-btn"
+                                    style={{ height: "32px", padding: "0 12px", fontSize: "11px" }}
+                                    onClick={() => deleteSavedRiderStatement(st.id)}
+                                  >
+                                    🗑️ Delete
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
                         </tbody>
-                        {riderRangeSummary.dailyRows.length > 0 && (
-                          <tfoot>
-                            <tr>
-                              <th>TOTAL</th>
-                              <th>{riderRangeSummary.deliveredCount}</th>
-                              <th>{money(riderRangeSummary.deliveredCod)}</th>
-                              <th>{money(riderRangeSummary.deliveredOnline)}</th>
-                              <th>{money(riderRangeSummary.deliveredTotal)}</th>
-                              <th>{money(riderRangeSummary.totalCharge)}</th>
-                              <th>{money(riderRangeSummary.collection)}</th>
-                              <th>{money(riderRangeSummary.bkash)}</th>
-                              <th>{money(riderRangeSummary.nagad)}</th>
-                              <th>{money(riderRangeSummary.fine)}</th>
-                              <th>{money(riderRangeSummary.salary)}</th>
-                              <th>{money(riderRangeSummary.payment)}</th>
-                              <th>—</th>
-                            </tr>
-                          </tfoot>
-                        )}
                       </table>
                     </div>
                   </div>
+                )}
 
-                  {/* TABLE NICHE DATE-WISE NOTES */}
-                  <div
-                    className="panel"
-                    style={{
-                      background: "#ffffff",
-                      border: "1px solid #cbd5e1",
-                      borderRadius: "14px",
-                      padding: "18px",
-                      boxShadow: "none",
-                      position: "relative",
-                      zIndex: 1,
-                    }}
-                  >
-                    <div className="panel-head" style={{ marginBottom: "12px" }}>
-                      <div>
-                        <h3>📝 Date-Wise Notes ({riderSummaryStart} to {riderSummaryEnd})</h3>
-                        <p>All saved notes for {selectedRider?.name || "Selected Rider"}</p>
+                {/* ACTIVE STATEMENT (EITHER LOCKED ARCHIVE VIEW OR LIVE BUILDER) */}
+                {(() => {
+                  const isLockedView = Boolean(activeSavedRiderStatement);
+                  const displayData = isLockedView
+                    ? activeSavedRiderStatement
+                    : {
+                        riderName: selectedRider?.name || "Selected Rider",
+                        fromDate: riderSummaryStart,
+                        toDate: riderSummaryEnd,
+                        deliveredCount: riderRangeSummary.deliveredCount,
+                        baseTotal: riderSummaryCalculation.baseTotal,
+                        plusSum: riderSummaryCalculation.plusSum,
+                        minusSum: riderSummaryCalculation.minusSum,
+                        fineSum: riderSummaryCalculation.fineSum ?? riderSummaryCalculation.totalFine ?? 0,
+                        netTotal: riderSummaryCalculation.netTotal,
+                        adjustments: riderAdjustments,
+                        orderNotes: riderRangeSummary.orderNotesList,
+                      };
+
+                  const resolvedFineSum = Number(displayData.fineSum ?? displayData.totalFine ?? 0);
+
+                  return (
+                    <div
+                      className="printable-report-area history-print-box"
+                      style={{
+                        background: "#ffffff",
+                        padding: "26px",
+                        borderRadius: "16px",
+                        border: isLockedView ? "2px solid #059669" : "1px solid #e2e8f0",
+                        position: "relative",
+                      }}
+                    >
+                      <div
+                        className="pdf-watermark-logo"
+                        style={{
+                          display: "none",
+                          position: "absolute",
+                          top: "50%",
+                          left: "50%",
+                          transform: "translate(-50%, -50%)",
+                          opacity: 0.05,
+                          pointerEvents: "none",
+                          zIndex: 0,
+                        }}
+                      >
+                        <FoodishLogo size={360} />
                       </div>
-                      <span className="count-pill">{riderRangeSummary.notes.length} notes</span>
-                    </div>
 
-                    {riderRangeSummary.notes.length > 0 ? (
-                      <div style={{ display: "grid", gap: "10px" }}>
-                        {riderRangeSummary.notes.map((n) => (
-                          <div
-                            key={n.id}
-                            style={{
-                              padding: "10px 14px",
-                              borderRadius: "10px",
-                              background: "#f8fafc",
-                              borderLeft: "4px solid #3b82f6",
-                              borderTop: "1px solid #e2e8f0",
-                              borderRight: "1px solid #e2e8f0",
-                              borderBottom: "1px solid #e2e8f0",
-                            }}
-                          >
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
-                              <span
-                                style={{
-                                  background: "#dbeafe",
-                                  color: "#1e40af",
-                                  fontSize: "11px",
-                                  fontWeight: "800",
-                                  padding: "2px 8px",
-                                  borderRadius: "6px",
-                                }}
-                              >
-                                📅 {n.date}
-                              </span>
-                              <span style={{ fontSize: "11px", fontWeight: "700", color: "#64748b" }}>
-                                {n.typeLabel}
-                              </span>
+                      {/* LOCKED ARCHIVE BANNER */}
+                      {isLockedView && (
+                        <div
+                          className="print-hide"
+                          style={{
+                            background: "#ecfdf5",
+                            border: "1px solid #10b981",
+                            borderRadius: "10px",
+                            padding: "12px 16px",
+                            marginBottom: "18px",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                            gap: "10px",
+                          }}
+                        >
+                          <div style={{ fontSize: "13px", fontWeight: "800", color: "#065f46" }}>
+                            🔒 Viewing Permanently Saved Statement (Read-Only / Locked)
+                          </div>
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              style={{ height: "34px", padding: "0 14px", fontSize: "12px", background: "#3b82f6" }}
+                              onClick={() => window.print()}
+                            >
+                              🖨️ Print / PDF
+                            </button>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              style={{ height: "34px", padding: "0 14px", fontSize: "12px", background: "#2563eb" }}
+                              onClick={() => downloadRiderStatementCSV(displayData)}
+                            >
+                              📥 Download CSV
+                            </button>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              style={{ height: "34px", padding: "0 14px", fontSize: "12px", background: "#64748b" }}
+                              onClick={() => setActiveSavedRiderStatement(null)}
+                            >
+                              ✕ Close Saved View
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* PDF / STATEMENT HEADER */}
+                      <div className="print-header" style={{ textAlign: "center", marginBottom: "22px", position: "relative", zIndex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
+                          <FoodishLogo size={34} />
+                          <span style={{ fontSize: "26px", fontWeight: "900", letterSpacing: "2px", color: "#10b981" }}>FOODISH</span>
+                        </div>
+                        <h1 style={{ fontSize: "26px", fontWeight: "900", color: "#0f172a", margin: "0 0 6px", textTransform: "uppercase" }}>
+                          {displayData.riderName} — COD Cash Statement
+                        </h1>
+                        <p style={{ fontSize: "14px", fontWeight: "700", color: "#475569", margin: 0 }}>
+                          From Date: {displayData.fromDate} To Date: {displayData.toDate} ({displayData.deliveredCount} Delivered COD Orders)
+                        </p>
+                      </div>
+
+                      {/* SINGLE TOTAL BOX (ONLY TOTAL COD CASH AMOUNT) */}
+                      <div
+                        style={{
+                          background: "linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%)",
+                          border: "2.5px solid #10b981",
+                          borderRadius: "16px",
+                          padding: "22px",
+                          marginBottom: "20px",
+                          position: "relative",
+                          zIndex: 1,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "14px" }}>
+                          <div>
+                            <div style={{ fontSize: "11px", fontWeight: "800", color: "#047857", letterSpacing: "0.8px", textTransform: "uppercase" }}>
+                              FROM {displayData.fromDate} TO {displayData.toDate}
                             </div>
-                            <div style={{ fontSize: "13px", fontWeight: "600", color: "#0f172a", marginTop: "6px", whiteSpace: "pre-wrap" }}>
-                              {n.note}
+                            <div style={{ fontSize: "18px", fontWeight: "900", color: "#0f172a", marginTop: "6px" }}>
+                              Total COD Cash Amount: <span style={{ color: "#047857", fontSize: "22px" }}>{money(displayData.baseTotal)}</span>
                             </div>
                           </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ textAlign: "center", color: "#9aa5b5", padding: "20px", fontSize: "13px" }}>
-                        No notes found between {riderSummaryStart} and {riderSummaryEnd}.
-                      </div>
-                    )}
-                  </div>
 
-                  {/* Print Sign Area */}
-                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: "60px", paddingTop: "16px", position: "relative", zIndex: 1 }}>
-                    <div style={{ textAlign: "center", width: "200px" }}>
-                      <div style={{ borderTop: "2px solid #0f172a", marginBottom: "6px" }} />
-                      <strong style={{ fontSize: "13px", color: "#0f172a" }}>Rider Sign</strong>
+                          <div style={{ textAlign: "right" }}>
+                            <div style={{ fontSize: "11px", fontWeight: "800", color: "#065f46", textTransform: "uppercase" }}>
+                              NET FINAL COD CASH TOTAL
+                            </div>
+                            <div style={{ fontSize: "34px", fontWeight: "900", color: "#14532d", lineHeight: "1.15" }}>
+                              {money(displayData.netTotal)}
+                            </div>
+                            <div style={{ fontSize: "11px", fontWeight: "700", color: "#475569", marginTop: "3px" }}>
+                              Total COD ({money(displayData.baseTotal)}) + Plus ({money(displayData.plusSum)}) - Minus ({money(displayData.minusSum)}) - Fine ({money(resolvedFineSum)})
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* CONTROLS: + PLUS / - MINUS BOX & SEPARATE FINE BOX BELOW IT */}
+                      {!isLockedView && (
+                        <div
+                          className="print-hide"
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "16px",
+                            marginBottom: "22px",
+                          }}
+                        >
+                          {/* 1. PLUS (+) & MINUS (-) BOX */}
+                          <div
+                            style={{
+                              background: "#f8fafc",
+                              border: "1.5px solid #cbd5e1",
+                              borderRadius: "14px",
+                              padding: "16px",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "10px",
+                            }}
+                          >
+                            <div style={{ fontSize: "14px", fontWeight: "800", color: "#0f172a" }}>
+                              ➕ / ➖ Plus & Minus (Total COD Cash Amount theke jog/biyog)
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px" }}>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                placeholder="Amount (৳)"
+                                value={adjAmountInput}
+                                onChange={(e) => setAdjAmountInput(e.target.value)}
+                                style={{
+                                  height: "42px",
+                                  borderRadius: "8px",
+                                  border: "1px solid #cbd5e1",
+                                  padding: "0 12px",
+                                  fontSize: "15px",
+                                  fontWeight: "800",
+                                  background: "#ffffff",
+                                }}
+                              />
+                              <input
+                                type="text"
+                                placeholder="Note likhun..."
+                                value={adjNoteInput}
+                                onChange={(e) => setAdjNoteInput(e.target.value)}
+                                style={{
+                                  height: "42px",
+                                  borderRadius: "8px",
+                                  border: "1px solid #cbd5e1",
+                                  padding: "0 12px",
+                                  fontSize: "13px",
+                                  background: "#ffffff",
+                                }}
+                              />
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                              <button
+                                type="button"
+                                className="primary-btn"
+                                onClick={() => handleAddRiderAdjustment("plus")}
+                                style={{ height: "42px", background: "#16a34a", fontSize: "14px" }}
+                              >
+                                + Plus
+                              </button>
+                              <button
+                                type="button"
+                                className="primary-btn"
+                                onClick={() => handleAddRiderAdjustment("minus")}
+                                style={{ height: "42px", background: "#ea580c", fontSize: "14px" }}
+                              >
+                                - Minus
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* 2. SEPARATE FINE BOX BELOW */}
+                          <div
+                            style={{
+                              background: "#fef2f2",
+                              border: "1.5px solid #fecaca",
+                              borderRadius: "14px",
+                              padding: "16px",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "10px",
+                            }}
+                          >
+                            <div style={{ fontSize: "14px", fontWeight: "800", color: "#991b1b" }}>
+                              ⚠️ Fine Box (Total COD Cash Amount theke minus hobe)
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px" }}>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                placeholder="Fine Amount (৳)"
+                                value={fineAmountInput}
+                                onChange={(e) => setFineAmountInput(e.target.value)}
+                                style={{
+                                  height: "42px",
+                                  borderRadius: "8px",
+                                  border: "1px solid #fca5a5",
+                                  padding: "0 12px",
+                                  fontSize: "15px",
+                                  fontWeight: "800",
+                                  background: "#ffffff",
+                                }}
+                              />
+                              <input
+                                type="text"
+                                placeholder="Fine Note likhun..."
+                                value={fineNoteInput}
+                                onChange={(e) => setFineNoteInput(e.target.value)}
+                                style={{
+                                  height: "42px",
+                                  borderRadius: "8px",
+                                  border: "1px solid #fca5a5",
+                                  padding: "0 12px",
+                                  fontSize: "13px",
+                                  background: "#ffffff",
+                                }}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              onClick={() => handleAddRiderAdjustment("fine")}
+                              style={{ height: "42px", background: "#dc2626", fontSize: "14px" }}
+                            >
+                              - Minus Fine
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* SERIAL-WISE LEDGER TABLE (TOTAL COD CASH + PLUS + MINUS + FINE WITH SIDE NOTES) */}
+                      <div
+                        className="panel"
+                        style={{
+                          border: "1px solid #e2e8f0",
+                          padding: "16px",
+                          boxShadow: "none",
+                          position: "relative",
+                          zIndex: 1,
+                          marginBottom: "22px",
+                        }}
+                      >
+                        <div className="panel-head" style={{ marginBottom: "12px" }}>
+                          <div>
+                            <h3>📋 Serial-Wise COD Cash Calculation & Notes</h3>
+                            <p>Total COD Cash Amount with serial-wise Plus (+), Minus (-), Fine, and Notes</p>
+                          </div>
+                        </div>
+
+                        <div className="table-wrap">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>SL</th>
+                                <th>Type</th>
+                                <th>Amount</th>
+                                <th>Note</th>
+                                {!isLockedView && <th className="right print-hide">Action</th>}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr>
+                                <td><strong>1</strong></td>
+                                <td>
+                                  <span className="status good">Total COD Cash Amount</span>
+                                </td>
+                                <td><strong>{money(displayData.baseTotal)}</strong></td>
+                                <td style={{ whiteSpace: "normal" }}>
+                                  Total delivered COD cash from {displayData.fromDate} to {displayData.toDate}
+                                </td>
+                                {!isLockedView && <td className="right print-hide">—</td>}
+                              </tr>
+
+                              {(displayData.adjustments || []).map((adj, idx) => {
+                                const serialNum = 2 + idx;
+                                const isPlus = adj.type === "plus";
+                                const isFine = adj.type === "fine";
+                                return (
+                                  <tr key={adj.id}>
+                                    <td><strong>{serialNum}</strong></td>
+                                    <td>
+                                      <span className={`status ${isPlus ? "good" : "bad"}`}>
+                                        {isPlus ? "+ Plus" : isFine ? "Fine (-)" : "- Minus"}
+                                      </span>
+                                    </td>
+                                    <td>
+                                      <strong style={{ color: isPlus ? "#16a34a" : "#dc2626" }}>
+                                        {isPlus ? "+" : "-"} {money(adj.amount)}
+                                      </strong>
+                                    </td>
+                                    <td style={{ whiteSpace: "normal" }}>{adj.note || "—"}</td>
+                                    {!isLockedView && (
+                                      <td className="right print-hide">
+                                        <button
+                                          type="button"
+                                          className="delete-btn"
+                                          style={{ padding: "5px 10px", fontSize: "11px" }}
+                                          onClick={() => handleRemoveRiderAdjustment(adj.id)}
+                                        >
+                                          Remove
+                                        </button>
+                                      </td>
+                                    )}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot>
+                              <tr>
+                                <th colSpan={2}>FINAL NET COD CASH TOTAL</th>
+                                <th colSpan={!isLockedView ? 3 : 2} style={{ fontSize: "16px", color: "#14532d" }}>
+                                  {money(displayData.netTotal)}
+                                </th>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* BOTTOM: DATE-WISE ORDER NOTES LIST (FROM DATE TO TO DATE) */}
+                      <div
+                        className="panel"
+                        style={{
+                          background: "#ffffff",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: "14px",
+                          padding: "18px",
+                          boxShadow: "none",
+                          position: "relative",
+                          zIndex: 1,
+                        }}
+                      >
+                        <div className="panel-head" style={{ marginBottom: "12px" }}>
+                          <div>
+                            <h3>🚨 Date-Wise Order Notes ({displayData.fromDate} to {displayData.toDate})</h3>
+                            <p>All orders with notes assigned to {displayData.riderName}</p>
+                          </div>
+                          <span className="count-pill">{(displayData.orderNotes || []).length} order notes</span>
+                        </div>
+
+                        {(displayData.orderNotes || []).length > 0 ? (
+                          <div className="table-wrap">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>#</th>
+                                  <th>Date</th>
+                                  <th>Order ID</th>
+                                  <th>Order Status</th>
+                                  <th>Order Note</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(displayData.orderNotes || []).map((item, idx) => (
+                                  <tr key={item.id || idx}>
+                                    <td><strong>{idx + 1}</strong></td>
+                                    <td><strong>{item.date}</strong></td>
+                                    <td><strong>#{item.orderId}</strong></td>
+                                    <td>
+                                      <span
+                                        className={`status ${
+                                          item.isDelivered ? "good" : item.isCancelled ? "bad" : "pending"
+                                        }`}
+                                      >
+                                        {item.status}
+                                      </span>
+                                    </td>
+                                    <td style={{ whiteSpace: "normal", color: "#b91c1c", fontWeight: "800" }}>
+                                      {item.note}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div style={{ textAlign: "center", color: "#9aa5b5", padding: "20px", fontSize: "13px" }}>
+                            No order notes found between {displayData.fromDate} and {displayData.toDate}.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* SAVE STATEMENT TO DATABASE BUTTON (BOTTOM) */}
+                      {!isLockedView && (
+                        <div
+                          className="print-hide"
+                          style={{
+                            marginTop: "22px",
+                            padding: "18px",
+                            background: "#f8fafc",
+                            border: "2px dashed #10b981",
+                            borderRadius: "14px",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                            gap: "12px",
+                          }}
+                        >
+                          <div>
+                            <strong style={{ fontSize: "14px", color: "#0f172a", display: "block" }}>
+                              Save Permanent Statement for {displayData.riderName} ({displayData.fromDate} to {displayData.toDate})
+                            </strong>
+                            <span style={{ fontSize: "12px", color: "#64748b" }}>
+                              Once saved to database, this statement will be permanently locked and downloadable/printable anytime.
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className="primary-btn"
+                            disabled={saving || !selectedRider}
+                            onClick={saveRiderStatementToDatabase}
+                            style={{ height: "46px", padding: "0 24px", background: "#059669", fontSize: "14px" }}
+                          >
+                            💾 Save Statement to Database
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Print Sign Area */}
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "60px", paddingTop: "16px", position: "relative", zIndex: 1 }}>
+                        <div style={{ textAlign: "center", width: "200px" }}>
+                          <div style={{ borderTop: "2px solid #0f172a", marginBottom: "6px" }} />
+                          <strong style={{ fontSize: "13px", color: "#0f172a" }}>Rider Sign</strong>
+                        </div>
+                        <div style={{ textAlign: "center", width: "200px" }}>
+                          <div style={{ borderTop: "2px solid #0f172a", marginBottom: "6px" }} />
+                          <strong style={{ fontSize: "13px", color: "#0f172a" }}>Manager Sign</strong>
+                        </div>
+                      </div>
                     </div>
-                    <div style={{ textAlign: "center", width: "200px" }}>
-                      <div style={{ borderTop: "2px solid #0f172a", marginBottom: "6px" }} />
-                      <strong style={{ fontSize: "13px", color: "#0f172a" }}>Manager Sign</strong>
-                    </div>
-                  </div>
-                </div>
+                  );
+                })()}
               </>
             )}
           </section>
