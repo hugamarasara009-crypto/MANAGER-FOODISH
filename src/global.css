@@ -3,10 +3,13 @@
 }
 html, body, #root {
   min-height: 100%;
+  width: 100%;
+  max-width: 100vw;
   margin: 0;
+  padding: 0;
+  overflow-x: hidden;
 }
 body {
-  min-width: 320px;
   background: #f5f7fb;
 }
 button, input, select {

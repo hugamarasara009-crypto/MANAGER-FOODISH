@@ -263,9 +263,20 @@ function App() {
   const [resPageSearch, setResPageSearch] = useState("");
   const [noteModalEntry, setNoteModalEntry] = useState(null);
   const [noteInputVal, setNoteInputVal] = useState("");
+
+  // Rider Page States
+  const [riderTab, setRiderTab] = useState("daily"); // "daily" | "summary"
   const [riderPageDate, setRiderPageDate] = useState(todayKey());
   const [riderPageStatus, setRiderPageStatus] = useState("all");
   const [riderPageSearch, setRiderPageSearch] = useState("");
+  const [riderSummaryStart, setRiderSummaryStart] = useState(todayKey());
+  const [riderSummaryEnd, setRiderSummaryEnd] = useState(todayKey());
+
+  // Check-In Page States
+  const [checkInDate, setCheckInDate] = useState(todayKey());
+  const [checkInResSearch, setCheckInResSearch] = useState("");
+  const [checkInRiderSearch, setCheckInRiderSearch] = useState("");
+
   const [onlinePayDate, setOnlinePayDate] = useState(todayKey());
   const [onlinePayMethodFilter, setOnlinePayMethodFilter] = useState("all");
   const [onlinePaySearch, setOnlinePaySearch] = useState("");
@@ -949,6 +960,169 @@ function App() {
     };
   }, [orders, selectedRider, riderPageDate]);
 
+  // RIDER DATE-RANGE SUMMARY COMPUTED DATA (From Date -> To Date, with Date-wise Rows + Notes)
+  const riderRangeSummary = useMemo(() => {
+    if (!selectedRider || !riderSummaryStart || !riderSummaryEnd) {
+      return {
+        deliveredCod: 0,
+        deliveredOnline: 0,
+        deliveredTotal: 0,
+        totalCharge: 0,
+        cancelledTotal: 0,
+        deliveredCount: 0,
+        collection: 0,
+        bkash: 0,
+        nagad: 0,
+        fine: 0,
+        salary: 0,
+        payment: 0,
+        dailyRows: [],
+        notes: [],
+      };
+    }
+
+    const dailyMap = new Map();
+    let curr = new Date(riderSummaryStart);
+    const end = new Date(riderSummaryEnd);
+    if (!Number.isNaN(curr.getTime()) && !Number.isNaN(end.getTime()) && curr <= end) {
+      while (curr <= end) {
+        const k = dateKey(curr);
+        dailyMap.set(k, {
+          date: k,
+          deliveredCount: 0,
+          deliveredCod: 0,
+          deliveredOnline: 0,
+          deliveredTotal: 0,
+          totalOrdersAmt: 0,
+          totalProductAmt: 0,
+          totalCharge: 0,
+          cancelledTotal: 0,
+          collection: 0,
+          bkash: 0,
+          nagad: 0,
+          fine: 0,
+          salary: 0,
+          payment: 0,
+          checked: false,
+        });
+        curr.setDate(curr.getDate() + 1);
+      }
+    }
+
+    orders.forEach((order) => {
+      const k = dateKey(order.createdAt);
+      if (!k || k < riderSummaryStart || k > riderSummaryEnd) return;
+      if (String(order.riderId || "") !== String(selectedRider.id)) return;
+      if (!dailyMap.has(k)) return;
+
+      const row = dailyMap.get(k);
+      const amt = orderAmount(order);
+      const prodAmt = itemSubtotal(order.items);
+
+      if (isDelivered(order)) {
+        row.deliveredCount += 1;
+        row.totalOrdersAmt += amt;
+        row.totalProductAmt += prodAmt;
+        if (isCOD(order)) {
+          row.deliveredCod += amt;
+        } else {
+          row.deliveredOnline += amt;
+        }
+      } else if (isCancelled(order)) {
+        row.cancelledTotal += amt;
+      }
+    });
+
+    const collectedNotes = [];
+
+    managementEntries.forEach((entry) => {
+      if (entry.entityType !== "rider") return;
+      if (String(entry.entityId) !== String(selectedRider.id)) return;
+      const k = dateKey(entry.date || entry.createdAt);
+      if (!k || k < riderSummaryStart || k > riderSummaryEnd) return;
+
+      const t = normalized(entry.type);
+      const amt = Number(entry.amount || 0);
+
+      if (dailyMap.has(k)) {
+        const row = dailyMap.get(k);
+        if (t === "collection" || t === "physical") row.collection += amt;
+        if (t === "bkash") row.bkash += amt;
+        if (t === "nagad") row.nagad += amt;
+        if (t === "fine") row.fine += amt;
+        if (t === "salary") row.salary += amt;
+        if (t === "payment") row.payment += amt;
+        if (t === "rider_checked") row.checked = amt === 1;
+      }
+
+      if (entry.note && String(entry.note).trim() !== "") {
+        const labelMap = {
+          rider_note: "Daily Note",
+          collection: "Cash Collect Note",
+          physical: "Cash Collect Note",
+          bkash: "bKash Note",
+          nagad: "Nagad Note",
+          fine: "Fine Note",
+          salary: "Salary Note",
+          payment: "Payment Note",
+        };
+        collectedNotes.push({
+          id: entry.id,
+          date: k,
+          typeLabel: labelMap[t] || "Note",
+          note: String(entry.note).trim(),
+        });
+      }
+    });
+
+    const dailyRows = Array.from(dailyMap.values())
+      .map((r) => ({
+        ...r,
+        deliveredTotal: r.deliveredCod + r.deliveredOnline,
+        totalCharge: Math.max(0, r.totalOrdersAmt - r.totalProductAmt),
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    collectedNotes.sort((a, b) => a.date.localeCompare(b.date));
+
+    const totals = dailyRows.reduce(
+      (acc, r) => ({
+        deliveredCod: acc.deliveredCod + r.deliveredCod,
+        deliveredOnline: acc.deliveredOnline + r.deliveredOnline,
+        deliveredTotal: acc.deliveredTotal + r.deliveredTotal,
+        totalCharge: acc.totalCharge + r.totalCharge,
+        cancelledTotal: acc.cancelledTotal + r.cancelledTotal,
+        deliveredCount: acc.deliveredCount + r.deliveredCount,
+        collection: acc.collection + r.collection,
+        bkash: acc.bkash + r.bkash,
+        nagad: acc.nagad + r.nagad,
+        fine: acc.fine + r.fine,
+        salary: acc.salary + r.salary,
+        payment: acc.payment + r.payment,
+      }),
+      {
+        deliveredCod: 0,
+        deliveredOnline: 0,
+        deliveredTotal: 0,
+        totalCharge: 0,
+        cancelledTotal: 0,
+        deliveredCount: 0,
+        collection: 0,
+        bkash: 0,
+        nagad: 0,
+        fine: 0,
+        salary: 0,
+        payment: 0,
+      }
+    );
+
+    return {
+      ...totals,
+      dailyRows,
+      notes: collectedNotes,
+    };
+  }, [orders, managementEntries, selectedRider, riderSummaryStart, riderSummaryEnd]);
+
   // Online Payment Page Computed Data (bKash, Nagad, Rocket)
   const onlinePaymentOrders = useMemo(() => {
     return orders
@@ -1006,12 +1180,75 @@ function App() {
       ["collection", "physical"].includes(normalized(e.type))
   );
 
+  const restaurantCheckedEntry = managementEntries.find(
+    (e) =>
+      e.entityType === "restaurant" &&
+      String(e.entityId) === String(restaurantId) &&
+      dateKey(e.date || e.createdAt) === resPageDate &&
+      normalized(e.type) === "restaurant_checked"
+  );
+  const isRestaurantChecked = Number(restaurantCheckedEntry?.amount || 0) === 1;
+
+  // Toggle Restaurant Tick Mark: Tick = Auto Save (Delivered + Pending/OnTheWay), Cross = Manual
+  async function handleToggleRestaurantCheck(nextChecked) {
+    if (!restaurantId) return;
+    const resName = selectedRestaurant?.name || "Restaurant";
+    const autoSum =
+      Number(restaurantPageStats.deliveredTotal || 0) +
+      Number(restaurantPageStats.pendingTotal || 0);
+
+    await handleUpdateManagementEntry({
+      entityType: "restaurant",
+      entityId: restaurantId,
+      entityName: resName,
+      type: "restaurant_checked",
+      amount: nextChecked ? 1 : 0,
+      date: resPageDate,
+    });
+
+    if (nextChecked) {
+      await handleUpdateManagementEntry({
+        entityType: "restaurant",
+        entityId: restaurantId,
+        entityName: resName,
+        type: "physical",
+        amount: autoSum,
+        date: resPageDate,
+      });
+      setNotice({
+        type: "success",
+        text: `Checked! Physical amount auto-saved as ${money(autoSum)} (Delivered + Pending).`,
+      });
+    } else {
+      setNotice({
+        type: "success",
+        text: "Unchecked! Now you can enter Physical amount manually and save.",
+      });
+    }
+  }
+
   const riderCollectionEntry = managementEntries.find(
     (e) =>
       e.entityType === "rider" &&
       String(e.entityId) === String(riderId) &&
       dateKey(e.date || e.createdAt) === riderPageDate &&
       ["collection", "physical"].includes(normalized(e.type))
+  );
+
+  const riderBkashEntry = managementEntries.find(
+    (e) =>
+      e.entityType === "rider" &&
+      String(e.entityId) === String(riderId) &&
+      dateKey(e.date || e.createdAt) === riderPageDate &&
+      normalized(e.type) === "bkash"
+  );
+
+  const riderNagadEntry = managementEntries.find(
+    (e) =>
+      e.entityType === "rider" &&
+      String(e.entityId) === String(riderId) &&
+      dateKey(e.date || e.createdAt) === riderPageDate &&
+      normalized(e.type) === "nagad"
   );
 
   const riderFineEntry = managementEntries.find(
@@ -1029,6 +1266,155 @@ function App() {
       dateKey(e.date || e.createdAt) === riderPageDate &&
       normalized(e.type) === "salary"
   );
+
+  const riderPaymentEntry = managementEntries.find(
+    (e) =>
+      e.entityType === "rider" &&
+      String(e.entityId) === String(riderId) &&
+      dateKey(e.date || e.createdAt) === riderPageDate &&
+      normalized(e.type) === "payment"
+  );
+
+  const riderNoteEntry = managementEntries.find(
+    (e) =>
+      e.entityType === "rider" &&
+      String(e.entityId) === String(riderId) &&
+      dateKey(e.date || e.createdAt) === riderPageDate &&
+      normalized(e.type) === "rider_note"
+  );
+
+  const riderCheckedEntry = managementEntries.find(
+    (e) =>
+      e.entityType === "rider" &&
+      String(e.entityId) === String(riderId) &&
+      dateKey(e.date || e.createdAt) === riderPageDate &&
+      normalized(e.type) === "rider_checked"
+  );
+  const isRiderChecked = Number(riderCheckedEntry?.amount || 0) === 1;
+
+  const [riderInputs, setRiderInputs] = useState({
+    collection: "",
+    bkash: "",
+    nagad: "",
+    fine: "",
+    salary: "",
+    payment: "",
+    note: "",
+  });
+
+  useEffect(() => {
+    setRiderInputs({
+      collection: riderCollectionEntry ? String(riderCollectionEntry.amount ?? "") : "",
+      bkash: riderBkashEntry ? String(riderBkashEntry.amount ?? "") : "",
+      nagad: riderNagadEntry ? String(riderNagadEntry.amount ?? "") : "",
+      fine: riderFineEntry ? String(riderFineEntry.amount ?? "") : "",
+      salary: riderSalaryEntry ? String(riderSalaryEntry.amount ?? "") : "",
+      payment: riderPaymentEntry ? String(riderPaymentEntry.amount ?? "") : "",
+      note: riderNoteEntry ? String(riderNoteEntry.note ?? "") : "",
+    });
+  }, [
+    riderId,
+    riderPageDate,
+    riderCollectionEntry,
+    riderBkashEntry,
+    riderNagadEntry,
+    riderFineEntry,
+    riderSalaryEntry,
+    riderPaymentEntry,
+    riderNoteEntry,
+  ]);
+
+  // CHECK-IN PAGE COMPUTED LISTS (Date-Wise Restaurants sorted by Highest Sales + Riders Check Status)
+  const checkInRestaurantsList = useMemo(() => {
+    const ordersOnCheckDate = orders.filter(
+      (o) => dateKey(o.createdAt) === checkInDate && !isCancelled(o)
+    );
+
+    return restaurants
+      .map((r) => {
+        const resName = r.name || r.restaurantName || r.id;
+        let salesAmount = 0;
+        let orderCount = 0;
+
+        ordersOnCheckDate.forEach((o) => {
+          const sub = itemSubtotal(o.items, resName, r.id);
+          if (sub > 0) {
+            salesAmount += sub;
+            orderCount += 1;
+          }
+        });
+
+        const checkedDoc = managementEntries.find(
+          (e) =>
+            e.entityType === "restaurant" &&
+            String(e.entityId) === String(r.id) &&
+            dateKey(e.date || e.createdAt) === checkInDate &&
+            normalized(e.type) === "restaurant_checked"
+        );
+
+        const physicalDoc = managementEntries.find(
+          (e) =>
+            e.entityType === "restaurant" &&
+            String(e.entityId) === String(r.id) &&
+            dateKey(e.date || e.createdAt) === checkInDate &&
+            ["collection", "physical"].includes(normalized(e.type))
+        );
+
+        return {
+          ...r,
+          displayName: resName,
+          salesAmount,
+          orderCount,
+          isChecked: Number(checkedDoc?.amount || 0) === 1,
+          physicalAmount: Number(physicalDoc?.amount || 0),
+        };
+      })
+      .filter((r) =>
+        !checkInResSearch
+          ? true
+          : normalized(r.displayName).includes(normalized(checkInResSearch))
+      )
+      .sort((a, b) => b.salesAmount - a.salesAmount || a.displayName.localeCompare(b.displayName));
+  }, [restaurants, orders, managementEntries, checkInDate, checkInResSearch]);
+
+  const checkInRidersList = useMemo(() => {
+    const ordersOnCheckDate = orders.filter(
+      (o) => dateKey(o.createdAt) === checkInDate && isDelivered(o)
+    );
+
+    return riders
+      .map((r) => {
+        const riderName = r.name || r.id;
+        const riderOrders = ordersOnCheckDate.filter(
+          (o) => String(o.riderId || "") === String(r.id)
+        );
+        const deliveredCount = riderOrders.length;
+        const deliveredAmount = riderOrders.reduce((s, o) => s + orderAmount(o), 0);
+
+        const checkedDoc = managementEntries.find(
+          (e) =>
+            e.entityType === "rider" &&
+            String(e.entityId) === String(r.id) &&
+            dateKey(e.date || e.createdAt) === checkInDate &&
+            normalized(e.type) === "rider_checked"
+        );
+
+        return {
+          ...r,
+          displayName: riderName,
+          deliveredCount,
+          deliveredAmount,
+          isChecked: Number(checkedDoc?.amount || 0) === 1,
+        };
+      })
+      .filter((r) =>
+        !checkInRiderSearch
+          ? true
+          : normalized(r.displayName).includes(normalized(checkInRiderSearch)) ||
+            normalized(r.phone || "").includes(normalized(checkInRiderSearch))
+      )
+      .sort((a, b) => b.deliveredAmount - a.deliveredAmount || a.displayName.localeCompare(b.displayName));
+  }, [riders, orders, managementEntries, checkInDate, checkInRiderSearch]);
 
   const bKashTotal = onlineEntries
     .filter((entry) => normalized(entry.method) === "bkash")
@@ -1303,6 +1689,7 @@ function App() {
 
   const navItems = [
     ["overview", "Overview", "◫"],
+    ["checkin", "Check In", "✓"],
     ["restaurants", "Restaurants", "▤"],
     ["delivery-charge", "Delivery Charge", "৳"],
     ["online-payment", "Online Payment", "💳"],
@@ -1598,6 +1985,201 @@ function App() {
           </section>
         )}
 
+        {/* CHECK-IN PAGE (Mobile-First Responsive View - Full Screen Fit Without Horizontal Scroll) */}
+        {page === "checkin" && (
+          <section className="content checkin-mobile-page">
+            <div className="section-heading">
+              <div>
+                <h2>Daily Check-In Status</h2>
+                <p>Restaurants are sorted from highest to lowest sales. Verify check-in status on {checkInDate}.</p>
+              </div>
+            </div>
+
+            <div className="filter-bar checkin-filter-bar">
+              <label>
+                Check-In Date
+                <input
+                  type="date"
+                  value={checkInDate}
+                  onChange={(e) => setCheckInDate(e.target.value)}
+                />
+              </label>
+              <label>
+                Search Restaurant
+                <input
+                  type="text"
+                  value={checkInResSearch}
+                  onChange={(e) => setCheckInResSearch(e.target.value)}
+                  placeholder="Filter restaurants..."
+                />
+              </label>
+              <label>
+                Search Rider
+                <input
+                  type="text"
+                  value={checkInRiderSearch}
+                  onChange={(e) => setCheckInRiderSearch(e.target.value)}
+                  placeholder="Filter riders..."
+                />
+              </label>
+            </div>
+
+            <div className="stats-grid checkin-stats-grid" style={{ marginBottom: "20px" }}>
+              <StatCard
+                label="Restaurants Checked"
+                value={`${checkInRestaurantsList.filter((r) => r.isChecked).length} / ${checkInRestaurantsList.length}`}
+                hint={`Checked on ${checkInDate}`}
+                icon="✓"
+                tone="green"
+              />
+              <StatCard
+                label="Restaurants Pending"
+                value={checkInRestaurantsList.filter((r) => !r.isChecked).length}
+                hint="Not checked yet"
+                icon="!"
+                tone="red"
+              />
+              <StatCard
+                label="Riders Checked"
+                value={`${checkInRidersList.filter((r) => r.isChecked).length} / ${checkInRidersList.length}`}
+                hint={`Checked on ${checkInDate}`}
+                icon="✓"
+                tone="blue"
+              />
+              <StatCard
+                label="Riders Pending"
+                value={checkInRidersList.filter((r) => !r.isChecked).length}
+                hint="Not checked yet"
+                icon="!"
+                tone="orange"
+              />
+            </div>
+
+            <div className="checkin-columns-grid">
+              {/* RESTAURANTS LIST (MOBILE CARD VIEW) */}
+              <div className="panel checkin-panel" style={{ margin: 0 }}>
+                <div className="panel-head">
+                  <div>
+                    <h3>🍽️ Restaurants (Highest Sales)</h3>
+                    <p>Sorted by total sales on {checkInDate}</p>
+                  </div>
+                  <span className="count-pill">{checkInRestaurantsList.length}</span>
+                </div>
+
+                <div className="checkin-card-list">
+                  {checkInRestaurantsList.map((res, index) => (
+                    <div
+                      key={res.id}
+                      className={`checkin-item-card ${res.isChecked ? "is-checked" : ""}`}
+                    >
+                      <div className="checkin-card-top">
+                        <div className="checkin-title-wrap">
+                          <span className="checkin-rank">#{index + 1}</span>
+                          <div className="checkin-name-group">
+                            <strong className="checkin-entity-name">{res.displayName}</strong>
+                            <small className="checkin-sub-info">
+                              {res.orderCount} orders · Physical: {money(res.physicalAmount)}
+                            </small>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          className={`checkin-toggle-btn ${res.isChecked ? "checked" : "unchecked"}`}
+                          onClick={() =>
+                            handleUpdateManagementEntry({
+                              entityType: "restaurant",
+                              entityId: res.id,
+                              entityName: res.displayName,
+                              type: "restaurant_checked",
+                              amount: res.isChecked ? 0 : 1,
+                              date: checkInDate,
+                            })
+                          }
+                        >
+                          {res.isChecked ? "✓ Checked" : "✕ Unchecked"}
+                        </button>
+                      </div>
+
+                      <div className="checkin-card-bottom">
+                        <span className="checkin-metric-label">Sales ({checkInDate})</span>
+                        <strong
+                          className="checkin-metric-value"
+                          style={{ color: res.salesAmount > 0 ? "#047857" : "#64748b" }}
+                        >
+                          {money(res.salesAmount)}
+                        </strong>
+                      </div>
+                    </div>
+                  ))}
+                  {checkInRestaurantsList.length === 0 && (
+                    <div className="empty-cell">No restaurants found.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* RIDERS LIST (MOBILE CARD VIEW) */}
+              <div className="panel checkin-panel" style={{ margin: 0 }}>
+                <div className="panel-head">
+                  <div>
+                    <h3>🛵 Riders Check-In List</h3>
+                    <p>Check status on {checkInDate}</p>
+                  </div>
+                  <span className="count-pill">{checkInRidersList.length}</span>
+                </div>
+
+                <div className="checkin-card-list">
+                  {checkInRidersList.map((rid, index) => (
+                    <div
+                      key={rid.id}
+                      className={`checkin-item-card ${rid.isChecked ? "is-checked" : ""}`}
+                    >
+                      <div className="checkin-card-top">
+                        <div className="checkin-title-wrap">
+                          <span className="checkin-rank">#{index + 1}</span>
+                          <div className="checkin-name-group">
+                            <strong className="checkin-entity-name">{rid.displayName}</strong>
+                            <small className="checkin-sub-info">{rid.phone || "No Phone"}</small>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          className={`checkin-toggle-btn ${rid.isChecked ? "checked" : "unchecked"}`}
+                          onClick={() =>
+                            handleUpdateManagementEntry({
+                              entityType: "rider",
+                              entityId: rid.id,
+                              entityName: rid.displayName,
+                              type: "rider_checked",
+                              amount: rid.isChecked ? 0 : 1,
+                              date: checkInDate,
+                            })
+                          }
+                        >
+                          {rid.isChecked ? "✓ Checked" : "✕ Unchecked"}
+                        </button>
+                      </div>
+
+                      <div className="checkin-card-bottom">
+                        <span className="checkin-metric-label">
+                          Delivered ({rid.deliveredCount} orders)
+                        </span>
+                        <strong className="checkin-metric-value">
+                          {money(rid.deliveredAmount)}
+                        </strong>
+                      </div>
+                    </div>
+                  ))}
+                  {checkInRidersList.length === 0 && (
+                    <div className="empty-cell">No riders found.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* 2. ONLINE PAYMENT REPORT PAGE (bKash, Nagad, Rocket) */}
         {page === "online-payment" && (
           <section className="content">
@@ -1785,13 +2367,37 @@ function App() {
               <StatCard label="Cancelled Subtotal" value={money(restaurantPageStats.cancelledTotal)} hint={`Cancelled items subtotal · ${resPageDate}`} icon="×" tone="red" />
             </div>
 
-            <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", marginBottom: "20px", boxShadow: "0 2px 7px rgba(20,33,59,0.03)" }}>
+            <div
+              className="panel"
+              style={{
+                background: isRestaurantChecked ? "#f0fdf4" : "#ffffff",
+                border: isRestaurantChecked ? "2px solid #16a34a" : "1px solid #e2e8f0",
+                padding: "20px",
+                borderRadius: "14px",
+                marginBottom: "20px",
+                boxShadow: "0 2px 7px rgba(20,33,59,0.03)",
+              }}
+            >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "15px" }}>
                 <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span style={{ fontSize: "11px", fontWeight: "700", color: "#64748b", letterSpacing: "0.5px" }}>PHYSICAL CASH COLLECTION ({resPageDate})</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: "11px", fontWeight: "700", color: "#64748b", letterSpacing: "0.5px" }}>
+                      PHYSICAL CASH COLLECTION ({resPageDate})
+                    </span>
                     <button
-                      style={{ background: "#eff6ff", color: "#3b82f6", border: "1px solid #bfdbfe", borderRadius: "6px", padding: "2px 8px", fontSize: "11px", fontWeight: "700", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                      style={{
+                        background: "#eff6ff",
+                        color: "#3b82f6",
+                        border: "1px solid #bfdbfe",
+                        borderRadius: "6px",
+                        padding: "2px 8px",
+                        fontSize: "11px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px",
+                      }}
                       onClick={() => {
                         setNoteModalEntry({
                           type: "physical",
@@ -1812,6 +2418,11 @@ function App() {
                   <div style={{ fontSize: "30px", fontWeight: "900", color: "#0f172a", marginTop: "6px" }}>
                     {money(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0)}
                   </div>
+                  <div style={{ fontSize: "11px", color: "#475569", marginTop: "4px", fontWeight: "700" }}>
+                    {isRestaurantChecked
+                      ? `✓ Auto-calculated & saved: Delivered (${money(restaurantPageStats.deliveredTotal)}) + Pending/On The Way (${money(restaurantPageStats.pendingTotal)})`
+                      : "✕ Manual mode: Click Edit Amount to enter & save manually, or click ✓ Tick to auto-calculate."}
+                  </div>
                   {restaurantPhysicalEntry?.note && (
                     <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
                       "{restaurantPhysicalEntry.note}"
@@ -1819,26 +2430,92 @@ function App() {
                   )}
                 </div>
 
-                <div>
-                  <button
-                    className="primary-btn"
-                    style={{ background: "#10b981", height: "40px", padding: "0 16px", display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", fontWeight: "800" }}
-                    onClick={() => {
-                      setEditModalData({
-                        entityType: "restaurant",
-                        entityId: restaurantId,
-                        entityName: selectedRestaurant?.name || "Restaurant",
-                        type: "physical",
-                        amount: restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0,
-                        date: resPageDate,
-                        title: "Edit Physical Cash Amount",
-                      });
-                      setEditAmountVal(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : "");
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                  {/* TICK (AUTO SAVE) & CROSS (MANUAL) TOGGLE BUTTONS */}
+                  <div
+                    style={{
+                      display: "inline-flex",
+                      borderRadius: "10px",
+                      overflow: "hidden",
+                      border: "2px solid #cbd5e1",
+                      background: "#f8fafc",
                     }}
-                    title="Edit Amount"
                   >
-                    ✏️ Edit Amount
-                  </button>
+                    <button
+                      type="button"
+                      disabled={saving || !restaurantId}
+                      onClick={() => handleToggleRestaurantCheck(true)}
+                      title="Tick: Auto-save Delivered + Pending/On The Way"
+                      style={{
+                        border: 0,
+                        padding: "0 14px",
+                        height: "38px",
+                        background: isRestaurantChecked ? "#16a34a" : "transparent",
+                        color: isRestaurantChecked ? "#ffffff" : "#475569",
+                        fontWeight: "900",
+                        fontSize: "13px",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "5px",
+                      }}
+                    >
+                      ✓ Auto
+                    </button>
+                    <button
+                      type="button"
+                      disabled={saving || !restaurantId}
+                      onClick={() => handleToggleRestaurantCheck(false)}
+                      title="Cross: Manual entry mode"
+                      style={{
+                        border: 0,
+                        borderLeft: "1px solid #cbd5e1",
+                        padding: "0 14px",
+                        height: "38px",
+                        background: !isRestaurantChecked ? "#dc2626" : "transparent",
+                        color: !isRestaurantChecked ? "#ffffff" : "#475569",
+                        fontWeight: "900",
+                        fontSize: "13px",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "5px",
+                      }}
+                    >
+                      ✕ Manual
+                    </button>
+                  </div>
+
+                  {!isRestaurantChecked && (
+                    <button
+                      className="primary-btn"
+                      style={{
+                        background: "#10b981",
+                        height: "40px",
+                        padding: "0 16px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        fontSize: "13px",
+                        fontWeight: "800",
+                      }}
+                      onClick={() => {
+                        setEditModalData({
+                          entityType: "restaurant",
+                          entityId: restaurantId,
+                          entityName: selectedRestaurant?.name || "Restaurant",
+                          type: "physical",
+                          amount: restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0,
+                          date: resPageDate,
+                          title: "Edit Physical Cash Amount",
+                        });
+                        setEditAmountVal(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : "");
+                      }}
+                      title="Edit Amount Manually"
+                    >
+                      ✏️ Edit Amount
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -1948,308 +2625,761 @@ function App() {
         {/* 4. RIDERS PAGE */}
         {page === "riders" && (
           <section className="content">
-            <div className="section-heading">
+            <div className="section-heading print-hide" style={{ marginBottom: "14px" }}>
               <div>
                 <h2>Rider accounts & Orders</h2>
-                <p>View rider-specific orders with product details, calculated charges, and grand totals.</p>
+                <p>View rider-specific daily entries, orders, or date-range summary with PDF download & notes.</p>
               </div>
             </div>
 
-            <div className="filter-bar">
-              <label>
-                Rider
-                <select value={riderId} onChange={(e) => setRiderId(e.target.value)}>
-                  {riders.map((r) => (
-                    <option key={r.id} value={r.id}>{r.name || r.id}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Filter Date
-                <input type="date" value={riderPageDate} onChange={(e) => setRiderPageDate(e.target.value)} />
-              </label>
-              <label>
-                Order Status Filter
-                <select value={riderPageStatus} onChange={(e) => setRiderPageStatus(e.target.value)}>
-                  <option value="all">All Orders</option>
-                  <option value="delivered">Delivered Only</option>
-                  <option value="pending">Pending / Processing</option>
-                  <option value="on_the_way">On The Way</option>
-                  <option value="cancelled">Cancelled Only</option>
-                </select>
-              </label>
-              <label style={{ flex: 2 }}>
-                Search Orders (Order ID, Customer Name, Phone, Restaurant)
-                <input
-                  type="text"
-                  value={riderPageSearch}
-                  onChange={(e) => setRiderPageSearch(e.target.value)}
-                  placeholder="Search in rider orders..."
-                />
-              </label>
-            </div>
-
-            {/* Rider Top Summary Metric Grid Including Total Amount & Charge Box */}
+            {/* RIDER PAGE TOP TABS: Daily Accounts vs Summary */}
             <div
-              className="stats-grid orders-card-grid"
-              style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: "20px" }}
+              className="tabs print-hide"
+              style={{
+                background: "#ffffff",
+                padding: "6px 10px 0",
+                borderRadius: "12px",
+                border: "1px solid #e2e8f0",
+                marginBottom: "18px",
+                gap: "8px",
+              }}
             >
-              <StatCard label="Delivered COD Total" value={money(riderPageStats.deliveredCod)} hint={`Delivered COD · ${riderPageDate}`} icon="৳" tone="green" />
-              <StatCard label="Delivered Online Total" value={money(riderPageStats.deliveredOnline)} hint={`Delivered Online · ${riderPageDate}`} icon="💳" tone="blue" />
-              <StatCard
-                label="Total Amount (COD + Online)"
-                value={money(riderPageStats.deliveredTotal)}
-                hint="Total delivered collection"
-                icon="Σ"
-                tone="purple"
-              />
-              <StatCard
-                label="Delivery Charge Box"
-                value={money(riderPageStats.totalCharge)}
-                hint="Total Amount - Product Amount"
-                icon="⚡"
-                tone="orange"
-              />
-              <StatCard label="Cancelled Orders Total" value={money(riderPageStats.cancelledTotal)} hint={`Cancelled · ${riderPageDate}`} icon="×" tone="red" />
+              <button
+                type="button"
+                className={riderTab === "daily" ? "selected" : ""}
+                onClick={() => setRiderTab("daily")}
+                style={{ fontSize: "13px", padding: "10px 18px" }}
+              >
+                📋 Daily Accounts & Orders
+              </button>
+              <button
+                type="button"
+                className={riderTab === "summary" ? "selected" : ""}
+                onClick={() => setRiderTab("summary")}
+                style={{ fontSize: "13px", padding: "10px 18px" }}
+              >
+                📊 Summary (Date Range)
+              </button>
             </div>
 
-            <div className="stats-grid orders-card-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
-              <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", margin: 0, boxShadow: "0 2px 7px rgba(20,33,59,0.03)", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: "150px" }}>
-                <div>
-                  <span style={{ fontSize: "11px", fontWeight: "800", color: "#64748b", letterSpacing: "0.5px" }}>COD COLLECTION</span>
-                  <div style={{ fontSize: "28px", fontWeight: "900", color: "#0f172a", marginTop: "6px" }}>
-                    {money(riderCollectionEntry ? riderCollectionEntry.amount : 0)}
-                  </div>
-                  {riderCollectionEntry?.note && (
-                    <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
-                      Note: "{riderCollectionEntry.note}"
+            {/* TAB 1: DAILY ACCOUNTS & ORDERS */}
+            {riderTab === "daily" && (
+              <>
+                <div className="filter-bar">
+                  <label>
+                    Rider
+                    <select value={riderId} onChange={(e) => setRiderId(e.target.value)}>
+                      {riders.map((r) => (
+                        <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Filter Date
+                    <input type="date" value={riderPageDate} onChange={(e) => setRiderPageDate(e.target.value)} />
+                  </label>
+                  <label>
+                    Order Status Filter
+                    <select value={riderPageStatus} onChange={(e) => setRiderPageStatus(e.target.value)}>
+                      <option value="all">All Orders</option>
+                      <option value="delivered">Delivered Only</option>
+                      <option value="pending">Pending / Processing</option>
+                      <option value="on_the_way">On The Way</option>
+                      <option value="cancelled">Cancelled Only</option>
+                    </select>
+                  </label>
+                  <label style={{ flex: 2 }}>
+                    Search Orders (Order ID, Customer Name, Phone, Restaurant)
+                    <input
+                      type="text"
+                      value={riderPageSearch}
+                      onChange={(e) => setRiderPageSearch(e.target.value)}
+                      placeholder="Search in rider orders..."
+                    />
+                  </label>
+                </div>
+
+                {/* ১. বড় বক্স: ৪টি মূল হিসাব + হাইলাইট করা অ্যামাউন্ট ফিল্ড */}
+                <div
+                  className="panel"
+                  style={{
+                    background: "#ffffff",
+                    border: "2px solid #10b981",
+                    borderRadius: "16px",
+                    padding: "22px",
+                    marginBottom: "20px",
+                    boxShadow: "0 4px 16px rgba(16, 185, 129, 0.08)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      borderBottom: "1px solid #e2e8f0",
+                      paddingBottom: "12px",
+                      marginBottom: "18px",
+                      flexWrap: "wrap",
+                      gap: "10px",
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontSize: "11px", fontWeight: "800", color: "#059669", letterSpacing: "0.8px" }}>
+                        RIDER DELIVERY SUMMARY ({riderPageDate})
+                      </span>
+                      <h3 style={{ margin: "4px 0 0", fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>
+                        {selectedRider?.name || "Selected Rider"} — Account Summary
+                      </h3>
                     </div>
-                  )}
-                </div>
-                <div style={{ display: "flex", gap: "10px", borderTop: "1px solid #f1f5f9", marginTop: "15px", paddingTop: "12px" }}>
-                  <button
-                    style={{ flex: 1, background: "#eff6ff", color: "#3b82f6", border: "1px solid #bfdbfe", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
-                    onClick={() => {
-                      setNoteModalEntry({
-                        type: "collection",
-                        entityType: "rider",
-                        entityId: riderId,
-                        entityName: selectedRider?.name || "Rider",
-                        date: riderPageDate,
-                        amount: riderCollectionEntry ? riderCollectionEntry.amount : 0,
-                        note: riderCollectionEntry ? riderCollectionEntry.note || "" : "",
-                      });
-                      setNoteInputVal(riderCollectionEntry ? riderCollectionEntry.note || "" : "");
-                    }}
-                  >
-                    📝 Note {riderCollectionEntry?.note ? "•" : ""}
-                  </button>
-                  <button
-                    style={{ flex: 1, background: "#ecfdf5", color: "#059669", border: "1px solid #a7f3d0", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
-                    onClick={() => {
-                      setEditModalData({
-                        entityType: "rider",
-                        entityId: riderId,
-                        entityName: selectedRider?.name || "Rider",
-                        type: "collection",
-                        amount: riderCollectionEntry ? riderCollectionEntry.amount : 0,
-                        date: riderPageDate,
-                        title: "Edit COD Collection Amount",
-                      });
-                      setEditAmountVal(riderCollectionEntry ? riderCollectionEntry.amount : "");
-                    }}
-                  >
-                    ✏️ Edit
-                  </button>
-                </div>
-              </div>
-
-              <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", margin: 0, boxShadow: "0 2px 7px rgba(20,33,59,0.03)", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: "150px" }}>
-                <div>
-                  <span style={{ fontSize: "11px", fontWeight: "800", color: "#64748b", letterSpacing: "0.5px" }}>FINE AMOUNT</span>
-                  <div style={{ fontSize: "28px", fontWeight: "900", color: "#e25b56", marginTop: "6px" }}>
-                    {money(riderFineEntry ? riderFineEntry.amount : 0)}
+                    <span
+                      style={{
+                        background: "#fff0ef",
+                        color: "#dc2626",
+                        padding: "6px 12px",
+                        borderRadius: "20px",
+                        fontSize: "12px",
+                        fontWeight: "800",
+                      }}
+                    >
+                      Cancelled: {money(riderPageStats.cancelledTotal)}
+                    </span>
                   </div>
-                  {riderFineEntry?.note && (
-                    <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
-                      Note: "{riderFineEntry.note}"
-                    </div>
-                  )}
-                </div>
-                <div style={{ display: "flex", gap: "10px", borderTop: "1px solid #f1f5f9", marginTop: "15px", paddingTop: "12px" }}>
-                  <button
-                    style={{ flex: 1, background: "#eff6ff", color: "#3b82f6", border: "1px solid #bfdbfe", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
-                    onClick={() => {
-                      setNoteModalEntry({
-                        type: "fine",
-                        entityType: "rider",
-                        entityId: riderId,
-                        entityName: selectedRider?.name || "Rider",
-                        date: riderPageDate,
-                        amount: riderFineEntry ? riderFineEntry.amount : 0,
-                        note: riderFineEntry ? riderFineEntry.note || "" : "",
-                      });
-                      setNoteInputVal(riderFineEntry ? riderFineEntry.note || "" : "");
-                    }}
-                  >
-                    📝 Note {riderFineEntry?.note ? "•" : ""}
-                  </button>
-                  <button
-                    style={{ flex: 1, background: "#ecfdf5", color: "#059669", border: "1px solid #a7f3d0", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
-                    onClick={() => {
-                      setEditModalData({
-                        entityType: "rider",
-                        entityId: riderId,
-                        entityName: selectedRider?.name || "Rider",
-                        type: "fine",
-                        amount: riderFineEntry ? riderFineEntry.amount : 0,
-                        date: riderPageDate,
-                        title: "Edit Fine Amount",
-                      });
-                      setEditAmountVal(riderFineEntry ? riderFineEntry.amount : "");
-                    }}
-                  >
-                    ✏️ Edit
-                  </button>
-                </div>
-              </div>
 
-              <div className="panel" style={{ background: "#ffffff", border: "1px solid #e2e8f0", padding: "20px", borderRadius: "14px", margin: 0, boxShadow: "0 2px 7px rgba(20,33,59,0.03)", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: "150px" }}>
-                <div>
-                  <span style={{ fontSize: "11px", fontWeight: "800", color: "#64748b", letterSpacing: "0.5px" }}>DAILY SALARY</span>
-                  <div style={{ fontSize: "28px", fontWeight: "900", color: "#16a34a", marginTop: "6px" }}>
-                    {money(riderSalaryEntry ? riderSalaryEntry.amount : 0)}
+                  <div style={{ display: "grid", gap: "12px" }}>
+                    {[
+                      {
+                        label: "Delivered COD Total",
+                        val: money(riderPageStats.deliveredCod),
+                        border: "#10b981",
+                        bg: "#ecfdf5",
+                        color: "#065f46",
+                      },
+                      {
+                        label: "Delivered Online Total",
+                        val: money(riderPageStats.deliveredOnline),
+                        border: "#3b82f6",
+                        bg: "#eff6ff",
+                        color: "#1e40af",
+                      },
+                      {
+                        label: "Total Amount (COD + Online)",
+                        val: money(riderPageStats.deliveredTotal),
+                        border: "#8b5cf6",
+                        bg: "#f5f3ff",
+                        color: "#5b21b6",
+                      },
+                      {
+                        label: "Delivery Charge",
+                        val: money(riderPageStats.totalCharge),
+                        border: "#f59e0b",
+                        bg: "#fffbeb",
+                        color: "#92400e",
+                      },
+                    ].map((row) => (
+                      <div
+                        key={row.label}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          padding: "12px 16px",
+                          background: "#f8fafc",
+                          borderRadius: "10px",
+                          border: "1px solid #e2e8f0",
+                          flexWrap: "wrap",
+                          gap: "10px",
+                        }}
+                      >
+                        <span style={{ fontSize: "15px", fontWeight: "800", color: "#1e293b" }}>
+                          {row.label}
+                        </span>
+                        <input
+                          type="text"
+                          readOnly
+                          value={row.val}
+                          style={{
+                            width: "160px",
+                            textAlign: "right",
+                            padding: "8px 12px",
+                            borderRadius: "8px",
+                            border: `2px solid ${row.border}`,
+                            background: row.bg,
+                            color: row.color,
+                            fontSize: "16px",
+                            fontWeight: "900",
+                            outline: "none",
+                          }}
+                        />
+                      </div>
+                    ))}
                   </div>
-                  {riderSalaryEntry?.note && (
-                    <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
-                      Note: "{riderSalaryEntry.note}"
+                </div>
+
+                {/* ২. নিচে ৬টি আলাদা Editable ও Saveable বক্স (Cash Collect, bKash, Nagad, Fine, Salary, Payment) */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(195px, 1fr))",
+                    gap: "14px",
+                    marginBottom: "20px",
+                  }}
+                >
+                  {[
+                    { key: "collection", label: "Cash Collect", color: "#10b981", bg: "#ecfdf5" },
+                    { key: "bkash", label: "bKash", color: "#ec4899", bg: "#fdf2f8" },
+                    { key: "nagad", label: "Nagad", color: "#f97316", bg: "#fff7ed" },
+                    { key: "fine", label: "Fine", color: "#ef4444", bg: "#fef2f2" },
+                    { key: "salary", label: "Salary", color: "#16a34a", bg: "#f0fdf4" },
+                    { key: "payment", label: "Payment", color: "#3b82f6", bg: "#eff6ff" },
+                  ].map((item) => (
+                    <div
+                      key={item.key}
+                      className="panel"
+                      style={{
+                        margin: 0,
+                        padding: "16px",
+                        borderRadius: "14px",
+                        border: `2px solid ${item.color}`,
+                        background: "#ffffff",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "10px",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: "13px", fontWeight: "800", color: "#0f172a", textTransform: "uppercase" }}>
+                          {item.label}
+                        </span>
+                        <span style={{ fontSize: "10px", fontWeight: "700", color: "#64748b" }}>
+                          {riderPageDate}
+                        </span>
+                      </div>
+
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={riderInputs[item.key]}
+                        onChange={(e) =>
+                          setRiderInputs((prev) => ({ ...prev, [item.key]: e.target.value }))
+                        }
+                        style={{
+                          width: "100%",
+                          height: "42px",
+                          padding: "0 12px",
+                          borderRadius: "8px",
+                          border: "1px solid #cbd5e1",
+                          background: item.bg,
+                          fontSize: "16px",
+                          fontWeight: "800",
+                          color: "#0f172a",
+                          outline: "none",
+                        }}
+                      />
+
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        disabled={saving || !riderId}
+                        onClick={() =>
+                          handleUpdateManagementEntry({
+                            entityType: "rider",
+                            entityId: riderId,
+                            entityName: selectedRider?.name || "Rider",
+                            type: item.key,
+                            amount: Number(riderInputs[item.key] || 0),
+                            date: riderPageDate,
+                          })
+                        }
+                        style={{
+                          width: "100%",
+                          height: "36px",
+                          background: item.color,
+                          fontSize: "12px",
+                          fontWeight: "800",
+                        }}
+                      >
+                        💾 Save {item.label}
+                      </button>
                     </div>
-                  )}
+                  ))}
                 </div>
-                <div style={{ display: "flex", gap: "10px", borderTop: "1px solid #f1f5f9", marginTop: "15px", paddingTop: "12px" }}>
-                  <button
-                    style={{ flex: 1, background: "#eff6ff", color: "#3b82f6", border: "1px solid #bfdbfe", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
-                    onClick={() => {
-                      setNoteModalEntry({
-                        type: "salary",
-                        entityType: "rider",
-                        entityId: riderId,
-                        entityName: selectedRider?.name || "Rider",
-                        date: riderPageDate,
-                        amount: riderSalaryEntry ? riderSalaryEntry.amount : 0,
-                        note: riderSalaryEntry ? riderSalaryEntry.note || "" : "",
-                      });
-                      setNoteInputVal(riderSalaryEntry ? riderSalaryEntry.note || "" : "");
+
+                {/* ৩. আলাদা Note Box + ডানপাশে Rider Checked (✓) টিক মার্ক ফিল্ড */}
+                <div
+                  className="panel"
+                  style={{
+                    background: isRiderChecked ? "#f0fdf4" : "#ffffff",
+                    border: isRiderChecked ? "2px solid #16a34a" : "1px solid #cbd5e1",
+                    borderRadius: "14px",
+                    padding: "18px",
+                    marginBottom: "20px",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", flexWrap: "wrap", gap: "8px" }}>
+                    <span style={{ fontSize: "13px", fontWeight: "800", color: "#0f172a" }}>
+                      📝 Rider Daily Note ({riderPageDate})
+                    </span>
+                    <span style={{ fontSize: "11px", color: "#64748b", fontWeight: "700" }}>
+                      {selectedRider?.name || "Selected Rider"}
+                    </span>
+                  </div>
+
+                  <textarea
+                    rows={3}
+                    value={riderInputs.note}
+                    onChange={(e) => setRiderInputs((prev) => ({ ...prev, note: e.target.value }))}
+                    placeholder="Write any note for this rider on this date..."
+                    style={{
+                      width: "100%",
+                      padding: "12px",
+                      borderRadius: "10px",
+                      border: "1px solid #cbd5e1",
+                      fontSize: "13px",
+                      fontFamily: "inherit",
+                      color: "#0f172a",
+                      outline: "none",
+                      marginBottom: "12px",
+                      resize: "vertical",
+                      background: "#ffffff",
                     }}
-                  >
-                    📝 Note {riderSalaryEntry?.note ? "•" : ""}
-                  </button>
-                  <button
-                    style={{ flex: 1, background: "#ecfdf5", color: "#059669", border: "1px solid #a7f3d0", borderRadius: "8px", padding: "8px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "6px" }}
-                    onClick={() => {
-                      setEditModalData({
-                        entityType: "rider",
-                        entityId: riderId,
-                        entityName: selectedRider?.name || "Rider",
-                        type: "salary",
-                        amount: riderSalaryEntry ? riderSalaryEntry.amount : 0,
-                        date: riderPageDate,
-                        title: "Edit Salary Amount",
-                      });
-                      setEditAmountVal(riderSalaryEntry ? riderSalaryEntry.amount : "");
-                    }}
-                  >
-                    ✏️ Edit
-                  </button>
+                  />
+
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
+                    {/* RIDER CHECKED TICK MARK FIELD */}
+                    <label
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "10px",
+                        padding: "9px 16px",
+                        borderRadius: "10px",
+                        border: isRiderChecked ? "2px solid #16a34a" : "2px solid #cbd5e1",
+                        background: isRiderChecked ? "#dcfce7" : "#f8fafc",
+                        cursor: "pointer",
+                        userSelect: "none",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isRiderChecked}
+                        disabled={saving || !riderId}
+                        onChange={(e) =>
+                          handleUpdateManagementEntry({
+                            entityType: "rider",
+                            entityId: riderId,
+                            entityName: selectedRider?.name || "Rider",
+                            type: "rider_checked",
+                            amount: e.target.checked ? 1 : 0,
+                            date: riderPageDate,
+                          })
+                        }
+                        style={{ width: "20px", height: "20px", accentColor: "#16a34a", cursor: "pointer" }}
+                      />
+                      <span style={{ fontSize: "13px", fontWeight: "900", color: isRiderChecked ? "#14532d" : "#334155" }}>
+                        {isRiderChecked
+                          ? `✓ Checked on ${riderPageDate}`
+                          : `Mark as Checked (${riderPageDate})`}
+                      </span>
+                    </label>
+
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      disabled={saving || !riderId}
+                      onClick={() =>
+                        handleUpdateManagementEntry({
+                          entityType: "rider",
+                          entityId: riderId,
+                          entityName: selectedRider?.name || "Rider",
+                          type: "rider_note",
+                          amount: 0,
+                          note: riderInputs.note,
+                          date: riderPageDate,
+                        })
+                      }
+                      style={{ height: "40px", padding: "0 20px", background: "#0f172a" }}
+                    >
+                      💾 Save Note
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            <div className="panel">
-              <div className="panel-head">
-                <div>
-                  <h3>Rider Orders ({riderPageOrders.length})</h3>
-                  <p>Detailed breakdown including full items grouped by restaurants and order note</p>
-                </div>
-              </div>
+                <div className="panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Rider Orders ({riderPageOrders.length})</h3>
+                      <p>Detailed breakdown including full items grouped by restaurants and order note</p>
+                    </div>
+                  </div>
 
-              <div className="table-wrap universal-card-list">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Order ID</th>
-                      <th>Customer</th>
-                      <th>Full Order Items & Restaurants</th>
-                      <th>Time</th>
-                      <th>Payment</th>
-                      <th>Status</th>
-                      <th className="right">Total Price</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {riderPageOrders.map((order, idx) => {
-                      const orderNote = order.note || order.orderNote || order.instructions || "";
-                      const borderColors = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
-                      const cardBorderColor = borderColors[idx % borderColors.length];
-
-                      return (
-                        <tr key={order.id} style={{ "--card-border-color": cardBorderColor }}>
-                          <td data-label="Order ID">
-                            <strong>#{order.orderId || order.id.slice(0, 8)}</strong>
-                          </td>
-                          <td data-label="Customer">
-                            <div className="card-value-block">
-                              <strong>{order.userName || "—"}</strong>
-                              <small className="cell-sub">{order.userPhone || ""}</small>
-                            </div>
-                          </td>
-                          <td data-label="Full Order Items & Restaurants">
-                            <div className="card-value-block">
-                              <OrderItemsBreakdown items={order.items} />
-                              {orderNote && (
-                                <div
-                                  style={{
-                                    marginTop: "10px",
-                                    padding: "10px 14px",
-                                    background: "#fef2f2",
-                                    border: "2px solid #ef4444",
-                                    borderRadius: "10px",
-                                    color: "#b91c1c",
-                                    fontWeight: "900",
-                                    fontSize: "15px",
-                                    lineHeight: "1.5",
-                                    boxShadow: "0 2px 6px rgba(239,68,68,0.15)",
-                                  }}
-                                >
-                                  🚨 <span style={{ textDecoration: "underline" }}>ORDER NOTE</span>: {orderNote}
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                          <td data-label="Time">{formatDateTime(order.createdAt)}</td>
-                          <td data-label="Payment">
-                            <span style={{ fontWeight: "700" }}>{order.payment || order.paymentMethod || "—"}</span>
-                          </td>
-                          <td data-label="Status">
-                            <span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>
-                              {order.orderStatus || "Pending"}
-                            </span>
-                          </td>
-                          <td data-label="Total Price" className="right">
-                            <strong style={{ fontSize: "16px", color: "#0f172a" }}>{money(orderAmount(order))}</strong>
-                          </td>
+                  <div className="table-wrap universal-card-list">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Order ID</th>
+                          <th>Customer</th>
+                          <th>Full Order Items & Restaurants</th>
+                          <th>Time</th>
+                          <th>Payment</th>
+                          <th>Status</th>
+                          <th className="right">Total Price</th>
                         </tr>
-                      );
-                    })}
-                    {riderPageOrders.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="empty-cell">No orders found matching your search and filters.</td>
-                      </tr>
+                      </thead>
+                      <tbody>
+                        {riderPageOrders.map((order, idx) => {
+                          const orderNote = order.note || order.orderNote || order.instructions || "";
+                          const borderColors = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
+                          const cardBorderColor = borderColors[idx % borderColors.length];
+
+                          return (
+                            <tr key={order.id} style={{ "--card-border-color": cardBorderColor }}>
+                              <td data-label="Order ID">
+                                <strong>#{order.orderId || order.id.slice(0, 8)}</strong>
+                              </td>
+                              <td data-label="Customer">
+                                <div className="card-value-block">
+                                  <strong>{order.userName || "—"}</strong>
+                                  <small className="cell-sub">{order.userPhone || ""}</small>
+                                </div>
+                              </td>
+                              <td data-label="Full Order Items & Restaurants">
+                                <div className="card-value-block">
+                                  <OrderItemsBreakdown items={order.items} />
+                                  {orderNote && (
+                                    <div
+                                      style={{
+                                        marginTop: "10px",
+                                        padding: "10px 14px",
+                                        background: "#fef2f2",
+                                        border: "2px solid #ef4444",
+                                        borderRadius: "10px",
+                                        color: "#b91c1c",
+                                        fontWeight: "900",
+                                        fontSize: "15px",
+                                        lineHeight: "1.5",
+                                        boxShadow: "0 2px 6px rgba(239,68,68,0.15)",
+                                      }}
+                                    >
+                                      🚨 <span style={{ textDecoration: "underline" }}>ORDER NOTE</span>: {orderNote}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                              <td data-label="Time">{formatDateTime(order.createdAt)}</td>
+                              <td data-label="Payment">
+                                <span style={{ fontWeight: "700" }}>{order.payment || order.paymentMethod || "—"}</span>
+                              </td>
+                              <td data-label="Status">
+                                <span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>
+                                  {order.orderStatus || "Pending"}
+                                </span>
+                              </td>
+                              <td data-label="Total Price" className="right">
+                                <strong style={{ fontSize: "16px", color: "#0f172a" }}>{money(orderAmount(order))}</strong>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {riderPageOrders.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="empty-cell">No orders found matching your search and filters.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* TAB 2: RIDER DATE-RANGE SUMMARY WITH PDF DOWNLOAD & DATE-WISE TABLE */}
+            {riderTab === "summary" && (
+              <>
+                <div className="filter-bar print-hide">
+                  <label>
+                    Rider
+                    <select value={riderId} onChange={(e) => setRiderId(e.target.value)}>
+                      {riders.map((r) => (
+                        <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    From Date
+                    <input
+                      type="date"
+                      value={riderSummaryStart}
+                      onChange={(e) => setRiderSummaryStart(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    To Date
+                    <input
+                      type="date"
+                      value={riderSummaryEnd}
+                      min={riderSummaryStart}
+                      onChange={(e) => setRiderSummaryEnd(e.target.value)}
+                    />
+                  </label>
+                  <div style={{ display: "flex", alignItems: "flex-end", height: "38px" }}>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={() => window.print()}
+                      style={{ height: "38px", padding: "0 18px", background: "#3b82f6" }}
+                    >
+                      🖨️ Print / Download PDF
+                    </button>
+                  </div>
+                </div>
+
+                {/* PRINTABLE SUMMARY REPORT AREA */}
+                <div
+                  className="printable-report-area history-print-box"
+                  style={{
+                    background: "#ffffff",
+                    padding: "26px",
+                    borderRadius: "16px",
+                    border: "1px solid #e2e8f0",
+                    position: "relative",
+                  }}
+                >
+                  <div
+                    className="pdf-watermark-logo"
+                    style={{
+                      display: "none",
+                      position: "absolute",
+                      top: "50%",
+                      left: "50%",
+                      transform: "translate(-50%, -50%)",
+                      opacity: 0.05,
+                      pointerEvents: "none",
+                      zIndex: 0,
+                    }}
+                  >
+                    <FoodishLogo size={360} />
+                  </div>
+
+                  {/* PDF Header */}
+                  <div className="print-header" style={{ textAlign: "center", marginBottom: "24px", position: "relative", zIndex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
+                      <FoodishLogo size={34} />
+                      <span style={{ fontSize: "26px", fontWeight: "900", letterSpacing: "2px", color: "#10b981" }}>FOODISH</span>
+                    </div>
+                    <h1 style={{ fontSize: "26px", fontWeight: "900", color: "#0f172a", margin: "0 0 6px", textTransform: "uppercase" }}>
+                      {selectedRider?.name || "Rider"} — Summary Report
+                    </h1>
+                    <p style={{ fontSize: "14px", fontWeight: "700", color: "#475569", margin: 0 }}>
+                      From Date: {riderSummaryStart} To Date: {riderSummaryEnd} ({riderRangeSummary.deliveredCount} Delivered Orders)
+                    </p>
+                  </div>
+
+                  {/* Top Consolidated Summary Boxes */}
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+                      gap: "12px",
+                      marginBottom: "22px",
+                      position: "relative",
+                      zIndex: 1,
+                    }}
+                  >
+                    {[
+                      { label: "Delivered COD Total", val: riderRangeSummary.deliveredCod, border: "#10b981", bg: "#ecfdf5" },
+                      { label: "Delivered Online Total", val: riderRangeSummary.deliveredOnline, border: "#3b82f6", bg: "#eff6ff" },
+                      { label: "Total (COD + Online)", val: riderRangeSummary.deliveredTotal, border: "#8b5cf6", bg: "#f5f3ff" },
+                      { label: "Delivery Charge", val: riderRangeSummary.totalCharge, border: "#f59e0b", bg: "#fffbeb" },
+                      { label: "Cash Collect", val: riderRangeSummary.collection, border: "#10b981", bg: "#f0fdf4" },
+                      { label: "bKash", val: riderRangeSummary.bkash, border: "#ec4899", bg: "#fdf2f8" },
+                      { label: "Nagad", val: riderRangeSummary.nagad, border: "#f97316", bg: "#fff7ed" },
+                      { label: "Fine", val: riderRangeSummary.fine, border: "#ef4444", bg: "#fef2f2" },
+                      { label: "Salary", val: riderRangeSummary.salary, border: "#16a34a", bg: "#ecfdf5" },
+                      { label: "Payment", val: riderRangeSummary.payment, border: "#2563eb", bg: "#eff6ff" },
+                    ].map((box) => (
+                      <div
+                        key={box.label}
+                        style={{
+                          padding: "12px 14px",
+                          borderRadius: "10px",
+                          border: `2px solid ${box.border}`,
+                          background: box.bg,
+                        }}
+                      >
+                        <div style={{ fontSize: "11px", fontWeight: "800", color: "#334155", textTransform: "uppercase" }}>
+                          {box.label}
+                        </div>
+                        <div style={{ fontSize: "18px", fontWeight: "900", color: "#0f172a", marginTop: "4px" }}>
+                          {money(box.val)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* DATE-WISE FULL DETAILS TABLE */}
+                  <div className="panel" style={{ border: "1px solid #e2e8f0", padding: "16px", boxShadow: "none", position: "relative", zIndex: 1, marginBottom: "22px" }}>
+                    <div className="panel-head" style={{ marginBottom: "12px" }}>
+                      <div>
+                        <h3>📅 Date-Wise Full Breakdown Table</h3>
+                        <p>All metrics from {riderSummaryStart} to {riderSummaryEnd}</p>
+                      </div>
+                      <span className="count-pill">{riderRangeSummary.dailyRows.length} days</span>
+                    </div>
+
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Deliv.</th>
+                            <th>COD</th>
+                            <th>Online</th>
+                            <th>Total</th>
+                            <th>Charge</th>
+                            <th>Cash</th>
+                            <th>bKash</th>
+                            <th>Nagad</th>
+                            <th>Fine</th>
+                            <th>Salary</th>
+                            <th>Payment</th>
+                            <th>Check</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {riderRangeSummary.dailyRows.map((row) => (
+                            <tr key={row.date}>
+                              <td><strong>{row.date}</strong></td>
+                              <td>{row.deliveredCount}</td>
+                              <td>{money(row.deliveredCod)}</td>
+                              <td>{money(row.deliveredOnline)}</td>
+                              <td><strong>{money(row.deliveredTotal)}</strong></td>
+                              <td>{money(row.totalCharge)}</td>
+                              <td>{money(row.collection)}</td>
+                              <td>{money(row.bkash)}</td>
+                              <td>{money(row.nagad)}</td>
+                              <td>{money(row.fine)}</td>
+                              <td>{money(row.salary)}</td>
+                              <td>{money(row.payment)}</td>
+                              <td>
+                                <span
+                                  className={`status ${row.checked ? "good" : "pending"}`}
+                                >
+                                  {row.checked ? "✓ Yes" : "✕ No"}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                          {riderRangeSummary.dailyRows.length === 0 && (
+                            <tr>
+                              <td colSpan={13} className="empty-cell">No dates found in selected range.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                        {riderRangeSummary.dailyRows.length > 0 && (
+                          <tfoot>
+                            <tr>
+                              <th>TOTAL</th>
+                              <th>{riderRangeSummary.deliveredCount}</th>
+                              <th>{money(riderRangeSummary.deliveredCod)}</th>
+                              <th>{money(riderRangeSummary.deliveredOnline)}</th>
+                              <th>{money(riderRangeSummary.deliveredTotal)}</th>
+                              <th>{money(riderRangeSummary.totalCharge)}</th>
+                              <th>{money(riderRangeSummary.collection)}</th>
+                              <th>{money(riderRangeSummary.bkash)}</th>
+                              <th>{money(riderRangeSummary.nagad)}</th>
+                              <th>{money(riderRangeSummary.fine)}</th>
+                              <th>{money(riderRangeSummary.salary)}</th>
+                              <th>{money(riderRangeSummary.payment)}</th>
+                              <th>—</th>
+                            </tr>
+                          </tfoot>
+                        )}
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* TABLE NICHE DATE-WISE NOTES */}
+                  <div
+                    className="panel"
+                    style={{
+                      background: "#ffffff",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: "14px",
+                      padding: "18px",
+                      boxShadow: "none",
+                      position: "relative",
+                      zIndex: 1,
+                    }}
+                  >
+                    <div className="panel-head" style={{ marginBottom: "12px" }}>
+                      <div>
+                        <h3>📝 Date-Wise Notes ({riderSummaryStart} to {riderSummaryEnd})</h3>
+                        <p>All saved notes for {selectedRider?.name || "Selected Rider"}</p>
+                      </div>
+                      <span className="count-pill">{riderRangeSummary.notes.length} notes</span>
+                    </div>
+
+                    {riderRangeSummary.notes.length > 0 ? (
+                      <div style={{ display: "grid", gap: "10px" }}>
+                        {riderRangeSummary.notes.map((n) => (
+                          <div
+                            key={n.id}
+                            style={{
+                              padding: "10px 14px",
+                              borderRadius: "10px",
+                              background: "#f8fafc",
+                              borderLeft: "4px solid #3b82f6",
+                              borderTop: "1px solid #e2e8f0",
+                              borderRight: "1px solid #e2e8f0",
+                              borderBottom: "1px solid #e2e8f0",
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
+                              <span
+                                style={{
+                                  background: "#dbeafe",
+                                  color: "#1e40af",
+                                  fontSize: "11px",
+                                  fontWeight: "800",
+                                  padding: "2px 8px",
+                                  borderRadius: "6px",
+                                }}
+                              >
+                                📅 {n.date}
+                              </span>
+                              <span style={{ fontSize: "11px", fontWeight: "700", color: "#64748b" }}>
+                                {n.typeLabel}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: "13px", fontWeight: "600", color: "#0f172a", marginTop: "6px", whiteSpace: "pre-wrap" }}>
+                              {n.note}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ textAlign: "center", color: "#9aa5b5", padding: "20px", fontSize: "13px" }}>
+                        No notes found between {riderSummaryStart} and {riderSummaryEnd}.
+                      </div>
                     )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                  </div>
+
+                  {/* Print Sign Area */}
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: "60px", paddingTop: "16px", position: "relative", zIndex: 1 }}>
+                    <div style={{ textAlign: "center", width: "200px" }}>
+                      <div style={{ borderTop: "2px solid #0f172a", marginBottom: "6px" }} />
+                      <strong style={{ fontSize: "13px", color: "#0f172a" }}>Rider Sign</strong>
+                    </div>
+                    <div style={{ textAlign: "center", width: "200px" }}>
+                      <div style={{ borderTop: "2px solid #0f172a", marginBottom: "6px" }} />
+                      <strong style={{ fontSize: "13px", color: "#0f172a" }}>Manager Sign</strong>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </section>
         )}
 
@@ -3283,7 +4413,7 @@ function EntryTable({ entries, onDelete, showMethod = false }) {
 const styles = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
 :root{font-family:'DM Sans',sans-serif;color:#172033;background:#f5f7fb;font-synthesis:none}
-*{box-sizing:border-box}body{margin:0}.app-shell{min-height:100vh;display:flex;background:#f5f7fb}.sidebar{width:250px;background:#111b2e;color:#d5deed;min-height:100vh;padding:27px 17px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:5}.brand{display:flex;align-items:center;gap:11px;padding:0 10px 37px}.brand-mark{width:39px;height:39px;border-radius:13px;background:linear-gradient(145deg,#35c98b,#16a875);display:grid;place-items:center;color:white;font-weight:800;font-size:22px}.brand strong{display:block;color:#fff;font:800 18px 'Plus Jakarta Sans'}.brand small{display:block;color:#8190a8;font-size:9px;letter-spacing:1.4px;margin-top:3px}.side-label,.eyebrow{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#8290a8}.side-label{padding:0 12px 12px}.sidebar nav{display:grid;gap:6px}.nav-link{border:0;background:transparent;color:#aab6c9;text-align:left;padding:12px;border-radius:10px;display:flex;align-items:center;gap:12px;font:600 13px 'DM Sans';cursor:pointer}.nav-link:hover{background:#1b2941;color:#fff}.nav-link.active{background:#203b3d;color:#6de0ad}.nav-icon{width:22px;text-align:center;font-size:18px}.sidebar-bottom{margin-top:auto;border-top:1px solid #26334a;padding:18px 10px 0;font-size:11px;color:#aab6c9}.sidebar-bottom small{display:block;color:#74839b;margin:7px 0 0 15px;font-size:10px}.online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#35cf8b;margin-right:7px}.main-area{margin-left:250px;width:calc(100% - 250px);min-width:0}.topbar{height:91px;background:#fff;border-bottom:1px solid #e9edf4;display:flex;align-items:center;justify-content:space-between;padding:0 36px;position:sticky;top:0;z-index:4}.topbar h1{font:800 21px 'Plus Jakarta Sans';margin:5px 0 0;color:#18243a}.eyebrow{color:#93a0b3;font-size:9px}.topbar-right{display:flex;align-items:center;gap:12px}.refresh-btn{background:#e2e8f0;color:#1e293b;padding:0 14px;height:34px;font-size:11px;border-radius:17px}.refresh-btn:hover{background:#cbd5e1}.today-chip{font-size:11px;color:#64748b;background:#f2f8f5;padding:8px 12px;border-radius:20px}.today-chip span{color:#20b879;margin-right:5px}.avatar{width:34px;height:34px;background:#e6f6ef;color:#149966;border-radius:50%;display:grid;place-items:center;font-weight:800}.content{max-width:1440px;margin:0 auto;padding:30px 36px 18px}.section-heading{display:flex;justify-content:space-between;align-items:end;margin:0 0 22px}.section-heading h2{font:800 20px 'Plus Jakarta Sans';margin:0 0 5px}.section-heading p,.panel-head p{font-size:12px;color:#8a96a8;margin:0}.date-label{font-size:11px;color:#7c899d}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:20px}.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.stat-card{background:#fff;border:1px solid #e9edf4;border-radius:14px;padding:18px;min-width:0;box-shadow:0 2px 7px #14213b05}.stat-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:800;font-size:16px;margin-bottom:13px}.stat-icon.green{background:#e7f8f0;color:#17a66d}.stat-icon.red{background:#fff0ef;color:#e25b56}.stat-icon.blue{background:#eaf2ff;color:#4c7de1}.stat-icon.purple{background:#f2edff;color:#8a69d5}.stat-icon.pink{background:#fff0f6;color:#d94e93}.stat-icon.orange{background:#fff3e8;color:#d98835}.stat-label{font-size:11px;color:#8290a3;font-weight:600}.stat-value{font:800 23px 'Plus Jakarta Sans';color:#17243b;margin:5px 0}.stat-hint{font-size:10px;color:#9aa5b5}.panel{background:#fff;border:1px solid #e8edf4;border-radius:14px;margin-bottom:19px;padding:20px;box-shadow:0 2px 7px #14213b05;min-width:0}.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px}.panel-head h3{font:700 14px 'Plus Jakarta Sans';margin:0 0 5px}.count-pill{font-size:10px;background:#f1f5f9;color:#66758b;padding:6px 10px;border-radius:20px}.filter-bar{display:flex;align-items:end;gap:14px;flex-wrap:wrap;background:#fff;border:1px solid #e8edf4;border-radius:13px;padding:15px;margin-bottom:17px}.filter-bar label,.entry-form label{display:grid;gap:7px;color:#738096;font-size:10px;font-weight:700;min-width:160px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:38px;border:1px solid #e0e6ee;border-radius:8px;background:#fff;padding:0 10px;color:#25324a;font:500 12px 'DM Sans';outline:none}.filter-bar select:focus,.filter-bar input:focus,.entry-form input:focus,.entry-form select:focus{border-color:#32b982;box-shadow:0 0 0 3px #32b98218}.table-wrap{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;white-space:nowrap;text-align:left}th{font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:#1e293b;background:#f8fafc;padding:14px 12px;font-weight:900}td{font-size:14px;color:#1e293b;padding:14px 12px;border-bottom:1px solid #f0f2f6;font-weight:700}tbody tr:last-child td{border-bottom:0}td strong{color:#0f172a;font-size:14px;font-weight:800}.right{text-align:right}.cell-sub{display:block;font-size:11px;color:#475569;margin-top:3px;font-weight:600}.status{display:inline-flex;padding:4px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:capitalize}.status.good{background:#e8f8f0;color:#159b65}.status.bad{background:#fff0ef;color:#d85853}.status.pending{background:#fff7e8;color:#bb842b}.empty-cell{text-align:center;color:#9aa5b5;padding:28px}.entry-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:2px 0 18px}.entry-form label{flex:1}.entry-form .note-field{flex:2;min-width:190px}.rider-entry-form label{min-width:145px}.primary-btn{height:42px;padding:0 20px;background:#17a873;border:0;border-radius:8px;color:#fff;font:800 13px 'DM Sans';cursor:pointer;white-space:nowrap}.primary-btn:hover{background:#108d60}.primary-btn:disabled{opacity:.6;cursor:wait}.delete-btn{border:0;background:#fff1f0;color:#d35b54;border-radius:6px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer}.tabs{display:flex;gap:6px;border-bottom:1px solid #edf0f5;margin:-2px 0 15px}.tabs button{background:none;border:0;padding:10px 17px;color:#8995a6;font:700 12px 'DM Sans';cursor:pointer;border-bottom:2px solid transparent}.tabs button.selected{color:#159b68;border-color:#20b77a}.compact{border:0;padding:0;margin:0 0 15px}.list-heading{margin-top:20px}.footer{text-align:center;color:#a4adbb;font-size:10px;padding:14px 20px 24px}.loading-line{height:3px;background:#e7f5ee;color:#258d65;font-size:10px;padding-left:36px}.loading-line span{display:block;height:3px;width:35%;background:#22b77b;animation:load 1.5s infinite}@keyframes load{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}.alert{margin:18px 36px 0;padding:12px 14px;border-radius:9px;font-size:11px}.error-alert{background:#fff0ef;color:#b94c47}.toast{position:fixed;right:24px;bottom:24px;z-index:20;background:#14243a;color:white;border-radius:10px;padding:13px 17px;box-shadow:0 12px 35px #14213b30;font-size:12px;display:flex;gap:9px;align-items:center;max-width:min(440px,calc(100vw - 32px));animation:pop .2s ease}.toast.success span{color:#56dfa1}.toast.error span{color:#ff8880}@keyframes pop{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}.saving-overlay{position:fixed;inset:0;background:#0e1a2b70;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;gap:12px;font-size:12px}.loader{width:31px;height:31px;border:3px solid #d9eee5;border-top-color:#18a873;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.boot-screen{min-height:100vh;display:grid;place-content:center;justify-items:center;gap:12px;background:#f5f7fb;color:#66758b;font:12px 'DM Sans'}.error-panel{max-width:480px;background:#fff;padding:25px;border:1px solid #f1cecb;border-radius:12px;color:#a74440}.error-panel h2{font-size:17px}.error-panel p{font-size:12px;line-height:1.6}
+*{box-sizing:border-box}html,body{margin:0;padding:0;width:100%;max-width:100vw;overflow-x:hidden}.app-shell{min-height:100vh;width:100%;max-width:100vw;overflow-x:hidden;display:flex;background:#f5f7fb}.sidebar{width:250px;background:#111b2e;color:#d5deed;min-height:100vh;padding:27px 17px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:5}.brand{display:flex;align-items:center;gap:11px;padding:0 10px 37px}.brand-mark{width:39px;height:39px;border-radius:13px;background:linear-gradient(145deg,#35c98b,#16a875);display:grid;place-items:center;color:white;font-weight:800;font-size:22px}.brand strong{display:block;color:#fff;font:800 18px 'Plus Jakarta Sans'}.brand small{display:block;color:#8190a8;font-size:9px;letter-spacing:1.4px;margin-top:3px}.side-label,.eyebrow{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#8290a8}.side-label{padding:0 12px 12px}.sidebar nav{display:grid;gap:6px}.nav-link{border:0;background:transparent;color:#aab6c9;text-align:left;padding:12px;border-radius:10px;display:flex;align-items:center;gap:12px;font:600 13px 'DM Sans';cursor:pointer}.nav-link:hover{background:#1b2941;color:#fff}.nav-link.active{background:#203b3d;color:#6de0ad}.nav-icon{width:22px;text-align:center;font-size:18px}.sidebar-bottom{margin-top:auto;border-top:1px solid #26334a;padding:18px 10px 0;font-size:11px;color:#aab6c9}.sidebar-bottom small{display:block;color:#74839b;margin:7px 0 0 15px;font-size:10px}.online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#35cf8b;margin-right:7px}.main-area{margin-left:250px;width:calc(100% - 250px);max-width:100%;min-width:0;overflow-x:hidden}.topbar{height:91px;background:#fff;border-bottom:1px solid #e9edf4;display:flex;align-items:center;justify-content:space-between;padding:0 36px;position:sticky;top:0;z-index:4;width:100%}.topbar h1{font:800 21px 'Plus Jakarta Sans';margin:5px 0 0;color:#18243a}.eyebrow{color:#93a0b3;font-size:9px}.topbar-right{display:flex;align-items:center;gap:12px}.refresh-btn{background:#e2e8f0;color:#1e293b;padding:0 14px;height:34px;font-size:11px;border-radius:17px}.refresh-btn:hover{background:#cbd5e1}.today-chip{font-size:11px;color:#64748b;background:#f2f8f5;padding:8px 12px;border-radius:20px}.today-chip span{color:#20b879;margin-right:5px}.avatar{width:34px;height:34px;background:#e6f6ef;color:#149966;border-radius:50%;display:grid;place-items:center;font-weight:800}.content{max-width:1440px;width:100%;margin:0 auto;padding:30px 36px 18px}.section-heading{display:flex;justify-content:space-between;align-items:end;margin:0 0 22px}.section-heading h2{font:800 20px 'Plus Jakarta Sans';margin:0 0 5px}.section-heading p,.panel-head p{font-size:12px;color:#8a96a8;margin:0}.date-label{font-size:11px;color:#7c899d}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:20px}.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.stat-card{background:#fff;border:1px solid #e9edf4;border-radius:14px;padding:18px;min-width:0;box-shadow:0 2px 7px #14213b05}.stat-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:800;font-size:16px;margin-bottom:13px}.stat-icon.green{background:#e7f8f0;color:#17a66d}.stat-icon.red{background:#fff0ef;color:#e25b56}.stat-icon.blue{background:#eaf2ff;color:#4c7de1}.stat-icon.purple{background:#f2edff;color:#8a69d5}.stat-icon.pink{background:#fff0f6;color:#d94e93}.stat-icon.orange{background:#fff3e8;color:#d98835}.stat-label{font-size:11px;color:#8290a3;font-weight:600}.stat-value{font:800 23px 'Plus Jakarta Sans';color:#17243b;margin:5px 0}.stat-hint{font-size:10px;color:#9aa5b5}.panel{background:#fff;border:1px solid #e8edf4;border-radius:14px;margin-bottom:19px;padding:20px;box-shadow:0 2px 7px #14213b05;min-width:0;width:100%}.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px;gap:10px}.panel-head h3{font:700 14px 'Plus Jakarta Sans';margin:0 0 5px}.count-pill{font-size:10px;background:#f1f5f9;color:#66758b;padding:6px 10px;border-radius:20px;white-space:nowrap}.filter-bar{display:flex;align-items:end;gap:14px;flex-wrap:wrap;background:#fff;border:1px solid #e8edf4;border-radius:13px;padding:15px;margin-bottom:17px;width:100%}.filter-bar label,.entry-form label{display:grid;gap:7px;color:#738096;font-size:10px;font-weight:700;min-width:160px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:38px;border:1px solid #e0e6ee;border-radius:8px;background:#fff;padding:0 10px;color:#25324a;font:500 12px 'DM Sans';outline:none;width:100%;min-width:0}.filter-bar select:focus,.filter-bar input:focus,.entry-form input:focus,.entry-form select:focus{border-color:#32b982;box-shadow:0 0 0 3px #32b98218}.table-wrap{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;white-space:nowrap;text-align:left}th{font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:#1e293b;background:#f8fafc;padding:14px 12px;font-weight:900}td{font-size:14px;color:#1e293b;padding:14px 12px;border-bottom:1px solid #f0f2f6;font-weight:700}tbody tr:last-child td{border-bottom:0}td strong{color:#0f172a;font-size:14px;font-weight:800}.right{text-align:right}.cell-sub{display:block;font-size:11px;color:#475569;margin-top:3px;font-weight:600}.status{display:inline-flex;padding:4px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:capitalize}.status.good{background:#e8f8f0;color:#159b65}.status.bad{background:#fff0ef;color:#d85853}.status.pending{background:#fff7e8;color:#bb842b}.empty-cell{text-align:center;color:#9aa5b5;padding:28px}.entry-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:2px 0 18px}.entry-form label{flex:1}.entry-form .note-field{flex:2;min-width:190px}.rider-entry-form label{min-width:145px}.primary-btn{height:42px;padding:0 20px;background:#17a873;border:0;border-radius:8px;color:#fff;font:800 13px 'DM Sans';cursor:pointer;white-space:nowrap}.primary-btn:hover{background:#108d60}.primary-btn:disabled{opacity:.6;cursor:wait}.delete-btn{border:0;background:#fff1f0;color:#d35b54;border-radius:6px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer}.tabs{display:flex;gap:6px;border-bottom:1px solid #edf0f5;margin:-2px 0 15px}.tabs button{background:none;border:0;padding:10px 17px;color:#8995a6;font:700 12px 'DM Sans';cursor:pointer;border-bottom:2px solid transparent}.tabs button.selected{color:#159b68;border-color:#20b77a}.compact{border:0;padding:0;margin:0 0 15px}.list-heading{margin-top:20px}.footer{text-align:center;color:#a4adbb;font-size:10px;padding:14px 20px 24px}.loading-line{height:3px;background:#e7f5ee;color:#258d65;font-size:10px;padding-left:36px}.loading-line span{display:block;height:3px;width:35%;background:#22b77b;animation:load 1.5s infinite}@keyframes load{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}.alert{margin:18px 36px 0;padding:12px 14px;border-radius:9px;font-size:11px}.error-alert{background:#fff0ef;color:#b94c47}.toast{position:fixed;right:24px;bottom:24px;z-index:20;background:#14243a;color:white;border-radius:10px;padding:13px 17px;box-shadow:0 12px 35px #14213b30;font-size:12px;display:flex;gap:9px;align-items:center;max-width:min(440px,calc(100vw - 32px));animation:pop .2s ease}.toast.success span{color:#56dfa1}.toast.error span{color:#ff8880}@keyframes pop{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}.saving-overlay{position:fixed;inset:0;background:#0e1a2b70;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;gap:12px;font-size:12px}.loader{width:31px;height:31px;border:3px solid #d9eee5;border-top-color:#18a873;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.boot-screen{min-height:100vh;display:grid;place-content:center;justify-items:center;gap:12px;background:#f5f7fb;color:#66758b;font:12px 'DM Sans'}.error-panel{max-width:480px;background:#fff;padding:25px;border:1px solid #f1cecb;border-radius:12px;color:#a74440}.error-panel h2{font-size:17px}.error-panel p{font-size:12px;line-height:1.6}
 .login-page{min-height:100vh;position:relative;isolation:isolate;overflow:hidden;display:grid;place-items:center;padding:32px 18px;background:radial-gradient(ellipse at 15% 10%,#e1f8ed 0,transparent 34%),radial-gradient(ellipse at 90% 90%,#e6edff 0,transparent 36%),linear-gradient(135deg,#f8fbff 0%,#f1f6f8 48%,#f8faff 100%);font-family:'DM Sans',sans-serif;color:#17243b}
 .login-glow{position:absolute;z-index:-1;border-radius:50%;filter:blur(2px);pointer-events:none}.login-glow-one{width:330px;height:330px;left:-130px;top:18%;background:#b8f0d7;opacity:.32}.login-glow-two{width:390px;height:390px;right:-150px;bottom:4%;background:#c8d8ff;opacity:.32}
 .login-card{width:min(100%,460px);padding:48px 44px 36px;border:1px solid #e7edf2;border-radius:25px;background:rgba(255,255,255,.92);box-shadow:0 24px 70px rgba(28,48,75,.11),0 3px 10px rgba(28,48,75,.04);text-align:center;backdrop-filter:blur(14px)}
@@ -3370,6 +4500,175 @@ display: grid;
 grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 gap: 15px;
 }
+
+/* Check-In Mobile-First Full-Width View Styles */
+.checkin-mobile-page {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.checkin-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+.checkin-filter-bar label {
+  min-width: 0;
+  width: 100%;
+}
+.checkin-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+.checkin-columns-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  width: 100%;
+}
+.checkin-panel {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+.checkin-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.checkin-item-card {
+  width: 100%;
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all 0.15s ease;
+}
+.checkin-item-card.is-checked {
+  background: #f0fdf4;
+  border-color: #16a34a;
+}
+.checkin-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+.checkin-title-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  flex: 1;
+}
+.checkin-rank {
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 7px;
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+.checkin-item-card.is-checked .checkin-rank {
+  background: #dcfce7;
+  color: #15803d;
+}
+.checkin-name-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.checkin-entity-name {
+  font-size: 14px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.checkin-sub-info {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.checkin-toggle-btn {
+  flex-shrink: 0;
+  border-radius: 8px;
+  padding: 7px 11px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.checkin-toggle-btn.checked {
+  border: 2px solid #16a34a;
+  background: #16a34a;
+  color: #ffffff;
+}
+.checkin-toggle-btn.unchecked {
+  border: 2px solid #cbd5e1;
+  background: #ffffff;
+  color: #475569;
+}
+.checkin-card-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 8px;
+  border-top: 1px dashed #e2e8f0;
+  gap: 8px;
+  width: 100%;
+}
+.checkin-item-card.is-checked .checkin-card-bottom {
+  border-top-color: #bbf7d0;
+}
+.checkin-metric-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+}
+.checkin-metric-value {
+  font-size: 15px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+@media (max-width: 900px) {
+  .checkin-columns-grid {
+    grid-template-columns: 1fr;
+  }
+  .checkin-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .checkin-filter-bar {
+    grid-template-columns: 1fr;
+  }
+  .checkin-panel {
+    padding: 12px;
+  }
+  .checkin-item-card {
+    padding: 11px 12px;
+  }
+}
+
 @media print {
 @page {
 size: A4 portrait;
@@ -3431,7 +4730,7 @@ page-break-inside: avoid !important;
 }
 @media(max-width:520px){.login-page{padding:22px 14px 58px}.login-card{padding:37px 24px 29px;border-radius:20px}.login-card h1{font-size:24px}.login-brand-name{font-size:23px}.login-description{font-size:12px}}
 @media(max-width:1000px){.sidebar{width:210px}.main-area{margin-left:210px;width:calc(100% - 210px)}.content{padding:24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:680px){.sidebar{width:270px;max-width:82vw;padding:22px 17px;transform:translateX(-105%);transition:transform .32s cubic-bezier(.2,.8,.2,1);box-shadow:18px 0 50px #101b2e24}.sidebar.sidebar-open{transform:translateX(0)}.brand{padding:0 8px 30px}.brand>div:last-child,.side-label,.nav-link span:last-child,.sidebar-bottom{display:block}.nav-link{justify-content:flex-start;padding:14px 12px;min-height:46px}.main-area{margin-left:0;width:100%}.topbar{height:72px;padding:0 14px 0 58px;position:sticky}.mobile-menu-btn{display:grid;place-items:center;position:absolute;left:13px;top:18px;width:34px;height:34px;border:1px solid #e7edf2;border-radius:9px;background:#fff;color:#26364b;font-size:18px;cursor:pointer}.sidebar-scrim{display:block;position:fixed;inset:0;background:#0d1728a6;border:0;z-index:4;backdrop-filter:blur(2px)}.topbar h1{font-size:18px}.content{padding:20px 14px 30px}.section-heading{align-items:start;gap:10px;flex-direction:column}.section-heading h2{font-size:19px}.stats-grid,.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.stat-card{padding:15px;min-height:130px;border-radius:15px}.stat-icon{width:38px;height:38px}.stat-value{font-size:clamp(18px,5vw,23px)}.stat-label{font-size:11px}.stat-hint{font-size:10px;line-height:1.45}.panel{padding:15px;border-radius:14px}.filter-bar{padding:13px;gap:12px}.filter-bar label{flex:1 1 100%;min-width:0;font-size:11px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:44px;font-size:14px}.entry-form{display:grid;grid-template-columns:1fr;gap:13px}.entry-form label,.entry-form .note-field{min-width:0}.entry-form label{font-size:11px}.entry-form .primary-btn{width:100%;height:46px;font-size:13px}.primary-btn,.delete-btn{min-height:40px}.table-wrap{border-radius:9px}th{font-size:10px;padding:13px 12px}td{font-size:12px;padding:14px 12px}.date-label{font-size:11px}.alert{margin:12px 13px 0}.today-chip{font-size:10px;padding:8px}.avatar{width:34px;height:34px}.footer{padding-bottom:30px}}
+@media(max-width:680px){.sidebar{width:270px;max-width:82vw;padding:22px 17px;transform:translateX(-105%);transition:transform .32s cubic-bezier(.2,.8,.2,1);box-shadow:18px 0 50px #101b2e24}.sidebar.sidebar-open{transform:translateX(0)}.brand{padding:0 8px 30px}.brand>div:last-child,.side-label,.nav-link span:last-child,.sidebar-bottom{display:block}.nav-link{justify-content:flex-start;padding:14px 12px;min-height:46px}.main-area{margin-left:0;width:100%}.topbar{height:72px;padding:0 14px 0 58px;position:sticky}.mobile-menu-btn{display:grid;place-items:center;position:absolute;left:13px;top:18px;width:34px;height:34px;border:1px solid #e7edf2;border-radius:9px;background:#fff;color:#26364b;font-size:18px;cursor:pointer}.sidebar-scrim{display:block;position:fixed;inset:0;background:#0d1728a6;border:0;z-index:4;backdrop-filter:blur(2px)}.topbar h1{font-size:18px}.content{padding:16px 12px 30px}.section-heading{align-items:start;gap:10px;flex-direction:column}.section-heading h2{font-size:19px}.stats-grid,.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.stat-card{padding:14px;min-height:120px;border-radius:14px}.stat-icon{width:34px;height:34px}.stat-value{font-size:clamp(17px,4.8vw,22px)}.stat-label{font-size:11px}.stat-hint{font-size:10px;line-height:1.4}.panel{padding:14px;border-radius:14px}.filter-bar{padding:12px;gap:10px}.filter-bar label{flex:1 1 100%;min-width:0;font-size:11px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:42px;font-size:14px}.entry-form{display:grid;grid-template-columns:1fr;gap:13px}.entry-form label,.entry-form .note-field{min-width:0}.entry-form label{font-size:11px}.entry-form .primary-btn{width:100%;height:46px;font-size:13px}.primary-btn,.delete-btn{min-height:40px}.table-wrap{border-radius:9px}th{font-size:10px;padding:13px 12px}td{font-size:12px;padding:14px 12px}.date-label{font-size:11px}.alert{margin:12px 13px 0}.today-chip{font-size:10px;padding:8px}.avatar{width:34px;height:34px}.footer{padding-bottom:30px}}
 @media(min-width:681px){.mobile-menu-btn,.sidebar-scrim{display:none}}
 @media(max-width:380px){.stats-grid,.stats-grid.two{grid-template-columns:1fr}.stat-card{min-height:unset}.topbar-right{gap:8px}.today-chip{display:none}}
 `;
