@@ -2481,8 +2481,8 @@ function App() {
                   </div>
                   <div style={{ fontSize: "11px", color: "#475569", marginTop: "4px", fontWeight: "700" }}>
                     {isRestaurantChecked
-                      ? `✓ Auto-calculated & saved: Delivered (${money(restaurantPageStats.deliveredTotal)}) + Pending/On The Way (${money(restaurantPageStats.pendingTotal)})`
-                      : "✕ Manual mode: Click Edit Amount to enter & save manually, or click ✓ Tick to auto-calculate."}
+                      ? "✓ Checked & added to Check-In list (Auto or Manual saved)."
+                      : "✕ Unchecked: Click ✓ Auto or ✏️ Edit Amount to save & add to Check-In list."}
                   </div>
                   {restaurantPhysicalEntry?.note && (
                     <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
@@ -2527,7 +2527,7 @@ function App() {
                       type="button"
                       disabled={saving || !restaurantId}
                       onClick={() => handleToggleRestaurantCheck(false)}
-                      title="Cross: Manual entry mode"
+                      title="Cross: Uncheck / Manual entry mode"
                       style={{
                         border: 0,
                         borderLeft: "1px solid #cbd5e1",
@@ -2547,36 +2547,34 @@ function App() {
                     </button>
                   </div>
 
-                  {!isRestaurantChecked && (
-                    <button
-                      className="primary-btn"
-                      style={{
-                        background: "#10b981",
-                        height: "40px",
-                        padding: "0 16px",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "6px",
-                        fontSize: "13px",
-                        fontWeight: "800",
-                      }}
-                      onClick={() => {
-                        setEditModalData({
-                          entityType: "restaurant",
-                          entityId: restaurantId,
-                          entityName: selectedRestaurant?.name || "Restaurant",
-                          type: "physical",
-                          amount: restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0,
-                          date: resPageDate,
-                          title: "Edit Physical Cash Amount",
-                        });
-                        setEditAmountVal(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : "");
-                      }}
-                      title="Edit Amount Manually"
-                    >
-                      ✏️ Edit Amount
-                    </button>
-                  )}
+                  <button
+                    className="primary-btn"
+                    style={{
+                      background: "#10b981",
+                      height: "40px",
+                      padding: "0 16px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      fontSize: "13px",
+                      fontWeight: "800",
+                    }}
+                    onClick={() => {
+                      setEditModalData({
+                        entityType: "restaurant",
+                        entityId: restaurantId,
+                        entityName: selectedRestaurant?.name || "Restaurant",
+                        type: "physical",
+                        amount: restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0,
+                        date: resPageDate,
+                        title: "Edit Physical Cash Amount",
+                      });
+                      setEditAmountVal(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : "");
+                    }}
+                    title="Edit Amount Manually"
+                  >
+                    ✏️ Edit Amount
+                  </button>
                 </div>
               </div>
             </div>
@@ -4692,6 +4690,19 @@ function App() {
                     amount: editAmountVal,
                     date: editModalData.date,
                   });
+
+                  // Manually physical amount save korleo jeno Check-In list-e Checked hoye jay
+                  if (editModalData.entityType === "restaurant" && editModalData.type === "physical") {
+                    await handleUpdateManagementEntry({
+                      entityType: "restaurant",
+                      entityId: editModalData.entityId,
+                      entityName: editModalData.entityName,
+                      type: "restaurant_checked",
+                      amount: 1,
+                      date: editModalData.date,
+                    });
+                  }
+
                   setEditModalData(null);
                 }}
               >
