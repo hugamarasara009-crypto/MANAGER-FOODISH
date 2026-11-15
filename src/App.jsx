@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { auth, db } from "./firebase";
 import {
   onAuthStateChanged,
@@ -30,6 +30,7 @@ const COLLECTIONS = {
   locations: "locations",
   paperworkReports: "paperwork_reports",
   riderStatements: "rider_statements",
+  restaurantStatements: "restaurant_statements",
 };
 
 const money = (value) =>
@@ -205,7 +206,7 @@ const OrderItemsBreakdown = ({ items = [], highlightRestaurantName = "", highlig
                   }}
                 >
                   <span>
-                    • {it.name || it.itemName || "Item"} × <strong>{it.quantity || 1}</strong>
+                    • {it.name || it.itemName || "Item"} × <strong>{it.quantity || 1}</strong> ({money(it.price || 0)})
                   </span>
                   <span style={{ fontWeight: "600" }}>
                     {money((it.price || 0) * (it.quantity || 1))}
@@ -244,15 +245,14 @@ function App() {
   const [notice, setNotice] = useState(null);
   const [orders, setOrders] = useState([]);
   const [restaurants, setRestaurants] = useState([]);
-  const [chargeRestaurantId, setChargeRestaurantId] = useState("");
-  const [hiddenChargeInput, setHiddenChargeInput] = useState("0");
-  const [chargeSearch, setChargeSearch] = useState("");
   const [riders, setRiders] = useState([]);
   const [managementEntries, setManagementEntries] = useState([]);
   const [onlineEntries, setOnlineEntries] = useState([]);
   const [locationsData, setLocationsData] = useState([]);
   const [firestorePaperReports, setFirestorePaperReports] = useState([]);
   const [firestoreRiderStatements, setFirestoreRiderStatements] = useState([]);
+  const [firestoreRestaurantStatements, setFirestoreRestaurantStatements] = useState([]);
+
   const [page, setPage] = useState("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [restaurantId, setRestaurantId] = useState("");
@@ -260,9 +260,21 @@ function App() {
   const [overviewDate, setOverviewDate] = useState(todayKey());
   const [overviewSearch, setOverviewSearch] = useState("");
   const [overviewStatus, setOverviewStatus] = useState("all");
+
+  // Restaurant Page States (Daily + Summary)
+  const [restaurantTab, setRestaurantTab] = useState("daily"); // "daily" | "summary"
   const [resPageDate, setResPageDate] = useState(todayKey());
   const [resPageStatus, setResPageStatus] = useState("all");
   const [resPageSearch, setResPageSearch] = useState("");
+  const [resSummaryStart, setResSummaryStart] = useState(todayKey());
+  const [resSummaryEnd, setResSummaryEnd] = useState(todayKey());
+  const [resAdjAmountInput, setResAdjAmountInput] = useState("");
+  const [resAdjNoteInput, setResAdjNoteInput] = useState("");
+  const [resFineAmountInput, setResFineAmountInput] = useState("");
+  const [resFineNoteInput, setResFineNoteInput] = useState("");
+  const [resAdjustments, setResAdjustments] = useState([]);
+  const [activeSavedResStatement, setActiveSavedResStatement] = useState(null);
+
   const [noteModalEntry, setNoteModalEntry] = useState(null);
   const [noteInputVal, setNoteInputVal] = useState("");
 
@@ -281,6 +293,14 @@ function App() {
   const [fineNoteInput, setFineNoteInput] = useState("");
   const [riderAdjustments, setRiderAdjustments] = useState([]);
   const [activeSavedRiderStatement, setActiveSavedRiderStatement] = useState(null);
+
+  // Full Order Details Modal on Note Long-Press
+  const [orderDetailModal, setOrderDetailModal] = useState(null);
+  const longPressTimerRef = useRef(null);
+
+  // Bulk Management + Delivery Charge Combined State
+  const [bulkDeliveryChargeInput, setBulkDeliveryChargeInput] = useState("0");
+  const [bulkSearch, setBulkSearch] = useState("");
 
   // Check-In Page States
   const [checkInDate, setCheckInDate] = useState(todayKey());
@@ -316,7 +336,6 @@ function App() {
     }
   }, [savedEntityReports]);
 
-  // Reset adjustments when rider or date range changes
   useEffect(() => {
     setRiderAdjustments([]);
     setAdjAmountInput("");
@@ -325,6 +344,15 @@ function App() {
     setFineNoteInput("");
     setActiveSavedRiderStatement(null);
   }, [riderId, riderSummaryStart, riderSummaryEnd]);
+
+  useEffect(() => {
+    setResAdjustments([]);
+    setResAdjAmountInput("");
+    setResAdjNoteInput("");
+    setResFineAmountInput("");
+    setResFineNoteInput("");
+    setActiveSavedResStatement(null);
+  }, [restaurantId, resSummaryStart, resSummaryEnd]);
 
   const [selectedRestaurantIds, setSelectedRestaurantIds] = useState(() => {
     try {
@@ -345,13 +373,9 @@ function App() {
   });
 
   const [paperWorkDate, setPaperWorkDate] = useState(todayKey());
-  const [selectedDate, setSelectedDate] = useState(todayKey());
   const [historyStart, setHistoryStart] = useState(todayKey());
   const [historyEnd, setHistoryEnd] = useState(todayKey());
   const [historyType, setHistoryType] = useState("restaurant");
-  const [onlineMethod, setOnlineMethod] = useState("bKash");
-  const [onlineAmount, setOnlineAmount] = useState("");
-  const [onlineNote, setOnlineNote] = useState("");
 
   useEffect(() => {
     try {
@@ -454,6 +478,7 @@ function App() {
     subscribe(COLLECTIONS.locations, setLocationsData, true);
     subscribe(COLLECTIONS.paperworkReports, setFirestorePaperReports, true);
     subscribe(COLLECTIONS.riderStatements, setFirestoreRiderStatements, true);
+    subscribe(COLLECTIONS.restaurantStatements, setFirestoreRestaurantStatements, true);
 
     return () => unsubs.forEach((unsubscribe) => unsubscribe());
   }, [user]);
@@ -466,57 +491,6 @@ function App() {
 
   const selectedRestaurant =
     restaurants.find((item) => item.id === restaurantId) || restaurants[0];
-  const selectedChargeRestaurant =
-    restaurants.find((item) => item.id === chargeRestaurantId) || restaurants[0];
-
-  useEffect(() => {
-    if (!chargeRestaurantId && restaurants.length) {
-      setChargeRestaurantId(restaurants[0].id);
-    }
-  }, [restaurants, chargeRestaurantId]);
-
-  useEffect(() => {
-    if (selectedChargeRestaurant) {
-      const current = Number(selectedChargeRestaurant.hiddenDeliveryCharge ?? 0);
-      setHiddenChargeInput(Number.isFinite(current) && current >= 0 ? String(current) : "0");
-    }
-  }, [chargeRestaurantId, restaurants]);
-
-  async function saveHiddenDeliveryCharge(event) {
-    event.preventDefault();
-    if (!chargeRestaurantId) {
-      setNotice({ type: "error", text: "Please select a restaurant first." });
-      return;
-    }
-    const amount = Number(hiddenChargeInput);
-    if (!Number.isFinite(amount) || amount < 0) {
-      setNotice({ type: "error", text: "Enter a valid charge amount (0 or greater)." });
-      return;
-    }
-    setSaving(true);
-    try {
-      await updateDoc(doc(db, COLLECTIONS.restaurants, chargeRestaurantId), {
-        hiddenDeliveryCharge: amount,
-        hiddenDeliveryChargeUpdatedAt: serverTimestamp(),
-      });
-      setRestaurants((current) =>
-        current.map((item) =>
-          item.id === chargeRestaurantId
-            ? { ...item, hiddenDeliveryCharge: amount }
-            : item
-        )
-      );
-      setNotice({
-        type: "success",
-        text: `Hidden delivery charge updated for ${selectedChargeRestaurant?.name || "the selected restaurant"}.`,
-      });
-    } catch (error) {
-      setNotice({ type: "error", text: `Could not save charge: ${error.message}` });
-    } finally {
-      setSaving(false);
-    }
-  }
-
   const selectedRider = riders.find((item) => item.id === riderId) || riders[0];
 
   useEffect(() => {
@@ -527,11 +501,32 @@ function App() {
     if (!riderId && riders.length) setRiderId(riders[0].id);
   }, [riders, riderId]);
 
+  const startNoteLongPress = (orderObj) => {
+    if (!orderObj) return;
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      setOrderDetailModal(orderObj);
+    }, 450);
+  };
+
+  const cancelNoteLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
   async function handleBulkRestaurantAction(turnOn) {
     if (!selectedRestaurantIds.length) {
       setNotice({ type: "error", text: "Prothomay kompokhe ekti restaurant select korun." });
       return;
     }
+    const chargeVal = Number(bulkDeliveryChargeInput);
+    if (!Number.isFinite(chargeVal) || chargeVal < 0) {
+      setNotice({ type: "error", text: "Sothik Delivery Charge din (0 ba tar beshi)." });
+      return;
+    }
+
     setSaving(true);
     try {
       let collectedLocations = [];
@@ -560,30 +555,77 @@ function App() {
       const finalAllLocations = Array.from(new Set(collectedLocations));
       const fallbackList = finalAllLocations.length > 0 ? finalAllLocations : ["Ashulia", "Daffodil Smart City", "Savar"];
 
+      let addedChargeCount = 0;
+
       const updatePromises = selectedRestaurantIds.map(async (resId) => {
         const resDocRef = doc(db, COLLECTIONS.restaurants, resId);
-        const payload = turnOn
-          ? {
-              open: "yes",
-              priority: 0,
-              availableLocations: fallbackList,
-            }
-          : {
-              open: "no",
-              priority: 1000,
-            };
-        await updateDoc(resDocRef, payload);
+        const resObj = restaurants.find((r) => r.id === resId);
+        const existingCharge = Number(resObj?.hiddenDeliveryCharge ?? 0);
+
+        if (turnOn) {
+          const payload = {
+            open: "yes",
+            priority: 0,
+            availableLocations: fallbackList,
+          };
+          if (existingCharge === 0 && chargeVal > 0) {
+            payload.hiddenDeliveryCharge = chargeVal;
+            payload.hiddenDeliveryChargeUpdatedAt = serverTimestamp();
+            addedChargeCount += 1;
+          }
+          await updateDoc(resDocRef, payload);
+        } else {
+          await updateDoc(resDocRef, {
+            open: "no",
+            priority: 1000,
+          });
+        }
       });
 
       await Promise.all(updatePromises);
       setNotice({
         type: "success",
         text: turnOn
-          ? "Selected restaurant-gula open hoiche, priority 0 ebong sob locations & sub-locations select kora hoiche!"
+          ? `Selected restaurant-gula open hoiche, priority 0, all locations select kora hoiche${
+              addedChargeCount > 0 ? ` ebong ${addedChargeCount}ti 0-charge restaurant-e ${money(chargeVal)} delivery charge add hoiche!` : "!"
+            }`
           : "Selected restaurant-gula off hoiche ebong priority 1000 kora hoiche.",
       });
     } catch (error) {
       setNotice({ type: "error", text: `Action failed: ${error.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleBulkSaveDeliveryCharge(event) {
+    event.preventDefault();
+    if (!selectedRestaurantIds.length) {
+      setNotice({ type: "error", text: "Prothomay kompokhe ekti restaurant select korun." });
+      return;
+    }
+    const chargeVal = Number(bulkDeliveryChargeInput);
+    if (!Number.isFinite(chargeVal) || chargeVal < 0) {
+      setNotice({ type: "error", text: "Sothik Delivery Charge din (0 ba tar beshi)." });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await Promise.all(
+        selectedRestaurantIds.map((resId) =>
+          updateDoc(doc(db, COLLECTIONS.restaurants, resId), {
+            hiddenDeliveryCharge: chargeVal,
+            hiddenDeliveryChargeUpdatedAt: serverTimestamp(),
+          })
+        )
+      );
+      setNotice({
+        type: "success",
+        text: `${selectedRestaurantIds.length}ti selected restaurant-er delivery charge ${money(chargeVal)} save kora hoiche!`,
+      });
+    } catch (error) {
+      setNotice({ type: "error", text: `Charge save failed: ${error.message}` });
     } finally {
       setSaving(false);
     }
@@ -837,7 +879,6 @@ function App() {
     .filter(isCOD)
     .reduce((sum, order) => sum + orderAmount(order), 0);
 
-  // RESTAURANTS PAGE ORDERS: Keep ALL items for complete breakdown display, but filter orders by restaurant and calculate subtotal ONLY for selected restaurant
   const restaurantPageOrders = useMemo(() => {
     if (!selectedRestaurant) return [];
     return orders
@@ -895,6 +936,205 @@ function App() {
 
     return { deliveredTotal: deliveredSum, pendingTotal: pendingSum, cancelledTotal: cancelledSum };
   }, [orders, selectedRestaurant, resPageDate]);
+
+  const restaurantRangeSummary = useMemo(() => {
+    if (!selectedRestaurant || !resSummaryStart || !resSummaryEnd) {
+      return {
+        deliveredSubtotal: 0,
+        deliveredCount: 0,
+        orderNotesList: [],
+      };
+    }
+
+    let deliveredSubtotal = 0;
+    let deliveredCount = 0;
+    const orderNotesList = [];
+
+    orders.forEach((order) => {
+      const k = dateKey(order.createdAt);
+      if (!k || k < resSummaryStart || k > resSummaryEnd) return;
+
+      const sub = itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id);
+      if (sub <= 0) return;
+
+      if (isDelivered(order)) {
+        deliveredCount += 1;
+        deliveredSubtotal += sub;
+      }
+
+      const rawOrderNote = order.note || order.orderNote || order.instructions || "";
+      if (String(rawOrderNote).trim() !== "") {
+        const matchedRider = riders.find((r) => String(r.id) === String(order.riderId));
+        orderNotesList.push({
+          id: order.id,
+          date: k,
+          createdAt: order.createdAt,
+          createdAtFormatted: formatDateTime(order.createdAt),
+          orderId: order.orderId || order.id.slice(0, 8),
+          status: order.orderStatus || "Pending",
+          isDelivered: isDelivered(order),
+          isCancelled: isCancelled(order),
+          note: String(rawOrderNote).trim(),
+          amount: orderAmount(order),
+          restaurantSubtotal: sub,
+          payment: order.payment || order.paymentMethod || "—",
+          userName: order.userName || "—",
+          userPhone: order.userPhone || "—",
+          userAddress: order.address || order.userAddress || order.deliveryAddress || "",
+          riderName: matchedRider ? matchedRider.name || matchedRider.id : order.riderName || "—",
+          riderPhone: matchedRider ? matchedRider.phone || "—" : order.riderPhone || "—",
+          items: Array.isArray(order.items) ? JSON.parse(JSON.stringify(order.items)) : [],
+        });
+      }
+    });
+
+    orderNotesList.sort(
+      (a, b) =>
+        a.date.localeCompare(b.date) ||
+        (asDate(a.createdAt)?.getTime() || 0) - (asDate(b.createdAt)?.getTime() || 0)
+    );
+
+    return {
+      deliveredSubtotal,
+      deliveredCount,
+      orderNotesList,
+    };
+  }, [orders, riders, selectedRestaurant, resSummaryStart, resSummaryEnd]);
+
+  const handleAddRestaurantAdjustment = (type) => {
+    const isFine = type === "fine";
+    const rawVal = isFine ? resFineAmountInput : resAdjAmountInput;
+    const rawNote = isFine ? resFineNoteInput : resAdjNoteInput;
+    const numericVal = Number(rawVal);
+
+    if (!rawVal || !Number.isFinite(numericVal) || numericVal <= 0) {
+      setNotice({ type: "error", text: "Sothik amount din (0-er beshi)." });
+      return;
+    }
+
+    const newEntry = {
+      id: `res-adj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      type,
+      amount: numericVal,
+      note: String(rawNote || "").trim() || (type === "plus" ? "Added (+)" : type === "minus" ? "Deducted (-)" : "Fine (-)"),
+      addedAt: new Date().toISOString(),
+    };
+
+    setResAdjustments((prev) => [...prev, newEntry]);
+    if (isFine) {
+      setResFineAmountInput("");
+      setResFineNoteInput("");
+    } else {
+      setResAdjAmountInput("");
+      setResAdjNoteInput("");
+    }
+    setNotice({
+      type: "success",
+      text: `${type === "plus" ? "+ Plus" : type === "minus" ? "- Minus" : "Fine"} (${money(numericVal)}) added!`,
+    });
+  };
+
+  const handleRemoveRestaurantAdjustment = (adjId) => {
+    setResAdjustments((prev) => prev.filter((item) => item.id !== adjId));
+  };
+
+  const resSummaryCalculation = useMemo(() => {
+    const baseTotal = Number(restaurantRangeSummary.deliveredSubtotal || 0);
+    let plusSum = 0;
+    let minusSum = 0;
+    let fineSum = 0;
+
+    resAdjustments.forEach((adj) => {
+      if (adj.type === "plus") plusSum += Number(adj.amount || 0);
+      if (adj.type === "minus") minusSum += Number(adj.amount || 0);
+      if (adj.type === "fine") fineSum += Number(adj.amount || 0);
+    });
+
+    const netTotal = baseTotal + plusSum - minusSum - fineSum;
+    return { baseTotal, plusSum, minusSum, fineSum, netTotal };
+  }, [restaurantRangeSummary, resAdjustments]);
+
+  async function saveRestaurantStatementToDatabase() {
+    if (!selectedRestaurant) {
+      setNotice({ type: "error", text: "Restaurant select korun." });
+      return;
+    }
+    setSaving(true);
+    try {
+      const statementPayload = {
+        restaurantId: selectedRestaurant.id,
+        restaurantName: selectedRestaurant.name || selectedRestaurant.id,
+        fromDate: resSummaryStart,
+        toDate: resSummaryEnd,
+        savedAt: new Date().toISOString(),
+        deliveredCount: restaurantRangeSummary.deliveredCount,
+        baseTotal: resSummaryCalculation.baseTotal,
+        plusSum: resSummaryCalculation.plusSum,
+        minusSum: resSummaryCalculation.minusSum,
+        fineSum: resSummaryCalculation.fineSum,
+        netTotal: resSummaryCalculation.netTotal,
+        adjustments: JSON.parse(JSON.stringify(resAdjustments)),
+        orderNotes: JSON.parse(JSON.stringify(restaurantRangeSummary.orderNotesList)),
+        locked: true,
+      };
+
+      const docRef = await addDoc(collection(db, COLLECTIONS.restaurantStatements), statementPayload);
+      setActiveSavedResStatement({ id: docRef.id, ...statementPayload });
+      setNotice({
+        type: "success",
+        text: `Statement permanently saved for ${selectedRestaurant.name} (${resSummaryStart} to ${resSummaryEnd})!`,
+      });
+    } catch (error) {
+      setNotice({ type: "error", text: `Save failed: ${error.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const deleteSavedRestaurantStatement = (statementId) => {
+    setDeleteModalData({
+      title: "Delete Saved Restaurant Statement",
+      message: "Are you sure you want to permanently delete this saved restaurant statement?",
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, COLLECTIONS.restaurantStatements, statementId));
+          if (activeSavedResStatement?.id === statementId) {
+            setActiveSavedResStatement(null);
+          }
+          setNotice({ type: "success", text: "Saved restaurant statement deleted successfully." });
+        } catch (error) {
+          setNotice({ type: "error", text: `Delete failed: ${error.message}` });
+        }
+      },
+    });
+  };
+
+  const downloadRestaurantStatementCSV = (st) => {
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += `FOODISH RESTAURANT STATEMENT\n`;
+    csvContent += `Restaurant Name:,"${st.restaurantName}"\n`;
+    csvContent += `Period:,${st.fromDate} to ${st.toDate}\n`;
+    csvContent += `Total Delivered Amount:,${st.baseTotal}\n\n`;
+    csvContent += `SL,Type,Amount,Note\n`;
+    (st.adjustments || []).forEach((adj, idx) => {
+      const sign = adj.type === "plus" ? "+ Plus" : adj.type === "minus" ? "- Minus" : "Fine (-)";
+      csvContent += `${idx + 1},"${sign}",${adj.amount},"${(adj.note || "").replace(/"/g, '""')}"\n`;
+    });
+    csvContent += `\nNet Final Payable Total:,${st.netTotal}\n\n`;
+    csvContent += `ORDER NOTES LIST\n`;
+    csvContent += `SL,Date,Order ID,Status,Order Note\n`;
+    (st.orderNotes || []).forEach((n, idx) => {
+      csvContent += `${idx + 1},${n.date},"#${n.orderId}","${n.status}","${(n.note || "").replace(/"/g, '""')}"\n`;
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `restaurant_statement_${st.restaurantName}_${st.fromDate}_to_${st.toDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const riderPageOrders = useMemo(() => {
     if (!selectedRider) return [];
@@ -981,7 +1221,6 @@ function App() {
     };
   }, [orders, selectedRider, riderPageDate]);
 
-  // RIDER DATE-RANGE SUMMARY COMPUTED DATA (Only Total COD Cash Amount + Date-Wise Order Notes)
   const riderRangeSummary = useMemo(() => {
     if (!selectedRider || !riderSummaryStart || !riderSummaryEnd) {
       return {
@@ -1007,19 +1246,26 @@ function App() {
         deliveredCod += amt;
       }
 
-      // Collect order notes with date, orderId, status
       const rawOrderNote = order.note || order.orderNote || order.instructions || "";
       if (String(rawOrderNote).trim() !== "") {
         orderNotesList.push({
           id: order.id,
           date: k,
           createdAt: order.createdAt,
+          createdAtFormatted: formatDateTime(order.createdAt),
           orderId: order.orderId || order.id.slice(0, 8),
           status: order.orderStatus || "Pending",
           isDelivered: isDelivered(order),
           isCancelled: isCancelled(order),
           note: String(rawOrderNote).trim(),
           amount: amt,
+          payment: order.payment || order.paymentMethod || "—",
+          userName: order.userName || "—",
+          userPhone: order.userPhone || "—",
+          userAddress: order.address || order.userAddress || order.deliveryAddress || "",
+          riderName: selectedRider?.name || order.riderName || "—",
+          riderPhone: selectedRider?.phone || order.riderPhone || "—",
+          items: Array.isArray(order.items) ? JSON.parse(JSON.stringify(order.items)) : [],
         });
       }
     });
@@ -1037,7 +1283,6 @@ function App() {
     };
   }, [orders, selectedRider, riderSummaryStart, riderSummaryEnd]);
 
-  // Add Plus / Minus / Fine adjustment row to Rider Summary
   const handleAddRiderAdjustment = (type) => {
     const isFine = type === "fine";
     const rawVal = isFine ? fineAmountInput : adjAmountInput;
@@ -1051,7 +1296,7 @@ function App() {
 
     const newEntry = {
       id: `adj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      type, // "plus" | "minus" | "fine"
+      type,
       amount: numericVal,
       note: String(rawNote || "").trim() || (type === "plus" ? "Added (+)" : type === "minus" ? "Deducted (-)" : "Fine (-)"),
       addedAt: new Date().toISOString(),
@@ -1075,7 +1320,6 @@ function App() {
     setRiderAdjustments((prev) => prev.filter((item) => item.id !== adjId));
   };
 
-  // Compute Total COD Cash Amount + Plus - Minus - Fine (No prior logic)
   const riderSummaryCalculation = useMemo(() => {
     const baseTotal = Number(riderRangeSummary.deliveredCod || 0);
 
@@ -1100,7 +1344,6 @@ function App() {
     };
   }, [riderRangeSummary, riderAdjustments]);
 
-  // Permanently Save Rider Statement to Firestore
   async function saveRiderStatementToDatabase() {
     if (!selectedRider) {
       setNotice({ type: "error", text: "Rider select korun." });
@@ -1184,7 +1427,6 @@ function App() {
     document.body.removeChild(link);
   };
 
-  // Online Payment Page Computed Data (bKash, Nagad, Rocket)
   const onlinePaymentOrders = useMemo(() => {
     return orders
       .filter((order) => {
@@ -1250,7 +1492,6 @@ function App() {
   );
   const isRestaurantChecked = Number(restaurantCheckedEntry?.amount || 0) === 1;
 
-  // Toggle Restaurant Tick Mark: Tick = Auto Save (Delivered + Pending/OnTheWay), Cross = Manual
   async function handleToggleRestaurantCheck(nextChecked) {
     if (!restaurantId) return;
     const resName = selectedRestaurant?.name || "Restaurant";
@@ -1385,7 +1626,6 @@ function App() {
     riderNoteEntry,
   ]);
 
-  // CHECK-IN PAGE COMPUTED LISTS (Date-Wise Restaurants sorted by Highest Sales + Riders Check Status)
   const checkInRestaurantsList = useMemo(() => {
     const ordersOnCheckDate = orders.filter(
       (o) => dateKey(o.createdAt) === checkInDate && !isCancelled(o)
@@ -1476,26 +1716,6 @@ function App() {
       )
       .sort((a, b) => b.deliveredAmount - a.deliveredAmount || a.displayName.localeCompare(b.displayName));
   }, [riders, orders, managementEntries, checkInDate, checkInRiderSearch]);
-
-  const bKashTotal = onlineEntries
-    .filter((entry) => normalized(entry.method) === "bkash")
-    .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-
-  const nagadTotal = onlineEntries
-    .filter((entry) => normalized(entry.method) === "nagad")
-    .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-
-  const rocketTotal = onlineEntries
-    .filter((entry) => normalized(entry.method) === "rocket")
-    .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-
-  const filteredOnline = onlineEntries
-    .filter(
-      (entry) =>
-        normalized(entry.method) === normalized(onlineMethod) &&
-        dateKey(entry.date || entry.createdAt) === selectedDate
-    )
-    .sort((a, b) => (asDate(b.createdAt)?.getTime() || 0) - (asDate(a.createdAt)?.getTime() || 0));
 
   const historyRestaurantRows = useMemo(() => {
     if (!historyStart || !historyEnd || !restaurantId) return [];
@@ -1723,39 +1943,12 @@ function App() {
     { sales: 0, collection: 0, cod: 0, fine: 0, salary: 0, bkash: 0, nagad: 0, rocket: 0 }
   );
 
-  async function saveOnlineEntry(event) {
-    event.preventDefault();
-    if (!onlineAmount || Number(onlineAmount) < 0) {
-      setNotice({ type: "error", text: "Sothik amount din." });
-      return;
-    }
-    setSaving(true);
-    try {
-      await addDoc(collection(db, COLLECTIONS.online), {
-        method: onlineMethod,
-        amount: Number(onlineAmount),
-        note: onlineNote.trim(),
-        date: selectedDate,
-        createdAt: serverTimestamp(),
-      });
-      setOnlineAmount("");
-      setOnlineNote("");
-      setNotice({ type: "success", text: `${onlineMethod} entry saved.` });
-    } catch (error) {
-      setNotice({ type: "error", text: `Save failed: ${error.message}` });
-    } finally {
-      setSaving(false);
-    }
-  }
-
   const navItems = [
     ["overview", "Overview", "◫"],
     ["checkin", "Check In", "✓"],
     ["restaurants", "Restaurants", "▤"],
-    ["delivery-charge", "Delivery Charge", "৳"],
     ["online-payment", "Online Payment", "💳"],
     ["riders", "Riders", "♧"],
-    ["online", "Online Accounts", "৳"],
     ["history", "History & Reports", "▦"],
     ["bulk", "Bulk Management", "⚙"],
     ["paperwork", "Paper Work", "📄"],
@@ -1903,7 +2096,7 @@ function App() {
 
         {/* 1. OVERVIEW PAGE */}
         {page === "overview" && (
-          <section className="content">
+          <section key="page-overview" className="content page-animate">
             <div className="section-heading">
               <div>
                 <h2>Daily performance & Orders</h2>
@@ -2046,9 +2239,9 @@ function App() {
           </section>
         )}
 
-        {/* CHECK-IN PAGE (Mobile-First Responsive View - Full Screen Fit Without Horizontal Scroll) */}
+        {/* CHECK-IN PAGE (Mobile-First Responsive View) */}
         {page === "checkin" && (
-          <section className="content checkin-mobile-page">
+          <section key="page-checkin" className="content checkin-mobile-page page-animate">
             <div className="section-heading">
               <div>
                 <h2>Daily Check-In Status</h2>
@@ -2117,7 +2310,6 @@ function App() {
             </div>
 
             <div className="checkin-columns-grid">
-              {/* RESTAURANTS LIST (MOBILE CARD VIEW) */}
               <div className="panel checkin-panel" style={{ margin: 0 }}>
                 <div className="panel-head">
                   <div>
@@ -2179,7 +2371,6 @@ function App() {
                 </div>
               </div>
 
-              {/* RIDERS LIST (MOBILE CARD VIEW) */}
               <div className="panel checkin-panel" style={{ margin: 0 }}>
                 <div className="panel-head">
                   <div>
@@ -2243,7 +2434,7 @@ function App() {
 
         {/* 2. ONLINE PAYMENT REPORT PAGE (bKash, Nagad, Rocket) */}
         {page === "online-payment" && (
-          <section className="content">
+          <section key="page-online-payment" className="content page-animate">
             <div className="section-heading print-hide">
               <div>
                 <h2>Online Payment Orders Report</h2>
@@ -2378,312 +2569,971 @@ function App() {
           </section>
         )}
 
-        {/* 3. RESTAURANTS PAGE */}
+        {/* 3. RESTAURANTS PAGE (DAILY ACCOUNTS + DATE-RANGE SUMMARY WITH PLUS/MINUS, FINE & PERMANENT SAVE) */}
         {page === "restaurants" && (
-          <section className="content">
-            <div className="section-heading">
+          <section key="page-restaurants" className="content page-animate">
+            <div className="section-heading print-hide" style={{ marginBottom: "14px" }}>
               <div>
                 <h2>Restaurant accounts & Orders</h2>
-                <p>Full order breakdown with items & note. Amount is counted only for {selectedRestaurant?.name || "the selected restaurant"}.</p>
+                <p>View daily restaurant orders, physical collections, or date-range summary with plus/minus, fine & PDF statement.</p>
               </div>
             </div>
 
-            <div className="filter-bar">
-              <label>
-                Restaurant
-                <select value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)}>
-                  {restaurants.map((r) => (
-                    <option key={r.id} value={r.id}>{r.name || r.id}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Filter Date
-                <input type="date" value={resPageDate} onChange={(e) => setResPageDate(e.target.value)} />
-              </label>
-              <label>
-                Order Status Filter
-                <select value={resPageStatus} onChange={(e) => setResPageStatus(e.target.value)}>
-                  <option value="all">All Orders</option>
-                  <option value="delivered">Delivered Only</option>
-                  <option value="pending">Pending / Processing</option>
-                  <option value="on_the_way">On The Way</option>
-                  <option value="cancelled">Cancelled Only</option>
-                </select>
-              </label>
-              <label style={{ flex: 2 }}>
-                Search Orders (Order ID, Customer Name, Phone)
-                <input
-                  type="text"
-                  value={resPageSearch}
-                  onChange={(e) => setResPageSearch(e.target.value)}
-                  placeholder="Search in restaurant orders..."
-                />
-              </label>
-            </div>
-
-            <div className="stats-grid orders-card-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
-              <StatCard label="Delivered Subtotal" value={money(restaurantPageStats.deliveredTotal)} hint={`Delivered items subtotal · ${resPageDate}`} icon="✓" tone="green" />
-              <StatCard label="Pending / On The Way" value={money(restaurantPageStats.pendingTotal)} hint={`Not delivered yet · ${resPageDate}`} icon="⌛" tone="orange" />
-              <StatCard label="Cancelled Subtotal" value={money(restaurantPageStats.cancelledTotal)} hint={`Cancelled items subtotal · ${resPageDate}`} icon="×" tone="red" />
-            </div>
-
+            {/* RESTAURANT PAGE TOP TABS: Daily Accounts vs Summary */}
             <div
-              className="panel"
+              className="tabs print-hide"
               style={{
-                background: isRestaurantChecked ? "#f0fdf4" : "#ffffff",
-                border: isRestaurantChecked ? "2px solid #16a34a" : "1px solid #e2e8f0",
-                padding: "20px",
-                borderRadius: "14px",
-                marginBottom: "20px",
-                boxShadow: "0 2px 7px rgba(20,33,59,0.03)",
+                background: "#ffffff",
+                padding: "6px 10px 0",
+                borderRadius: "12px",
+                border: "1px solid #e2e8f0",
+                marginBottom: "18px",
+                gap: "8px",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "15px" }}>
-                <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                    <span style={{ fontSize: "11px", fontWeight: "700", color: "#64748b", letterSpacing: "0.5px" }}>
-                      PHYSICAL CASH COLLECTION ({resPageDate})
-                    </span>
-                    <button
-                      style={{
-                        background: "#eff6ff",
-                        color: "#3b82f6",
-                        border: "1px solid #bfdbfe",
-                        borderRadius: "6px",
-                        padding: "2px 8px",
-                        fontSize: "11px",
-                        fontWeight: "700",
-                        cursor: "pointer",
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "4px",
-                      }}
-                      onClick={() => {
-                        setNoteModalEntry({
-                          type: "physical",
-                          entityType: "restaurant",
-                          entityId: restaurantId,
-                          entityName: selectedRestaurant?.name || "Restaurant",
-                          date: resPageDate,
-                          amount: restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0,
-                          note: restaurantPhysicalEntry ? restaurantPhysicalEntry.note || "" : "",
-                        });
-                        setNoteInputVal(restaurantPhysicalEntry ? restaurantPhysicalEntry.note || "" : "");
-                      }}
-                      title="View or Add Note"
-                    >
-                      📝 Note {restaurantPhysicalEntry?.note ? "•" : ""}
-                    </button>
-                  </div>
-                  <div style={{ fontSize: "30px", fontWeight: "900", color: "#0f172a", marginTop: "6px" }}>
-                    {money(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0)}
-                  </div>
-                  <div style={{ fontSize: "11px", color: "#475569", marginTop: "4px", fontWeight: "700" }}>
-                    {isRestaurantChecked
-                      ? "✓ Checked & added to Check-In list (Auto or Manual saved)."
-                      : "✕ Unchecked: Click ✓ Auto or ✏️ Edit Amount to save & add to Check-In list."}
-                  </div>
-                  {restaurantPhysicalEntry?.note && (
-                    <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
-                      "{restaurantPhysicalEntry.note}"
+              <button
+                type="button"
+                className={restaurantTab === "daily" ? "selected" : ""}
+                onClick={() => setRestaurantTab("daily")}
+                style={{ fontSize: "13px", padding: "10px 18px" }}
+              >
+                📋 Daily Accounts & Orders
+              </button>
+              <button
+                type="button"
+                className={restaurantTab === "summary" ? "selected" : ""}
+                onClick={() => setRestaurantTab("summary")}
+                style={{ fontSize: "13px", padding: "10px 18px" }}
+              >
+                📊 Summary (Date Range)
+              </button>
+            </div>
+
+            {/* TAB 1: DAILY RESTAURANT ACCOUNTS & ORDERS */}
+            {restaurantTab === "daily" && (
+              <div key="res-tab-daily" className="tab-pane-animate">
+                <div className="filter-bar">
+                  <label>
+                    Restaurant
+                    <select value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)}>
+                      {restaurants.map((r) => (
+                        <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Filter Date
+                    <input type="date" value={resPageDate} onChange={(e) => setResPageDate(e.target.value)} />
+                  </label>
+                  <label>
+                    Order Status Filter
+                    <select value={resPageStatus} onChange={(e) => setResPageStatus(e.target.value)}>
+                      <option value="all">All Orders</option>
+                      <option value="delivered">Delivered Only</option>
+                      <option value="pending">Pending / Processing</option>
+                      <option value="on_the_way">On The Way</option>
+                      <option value="cancelled">Cancelled Only</option>
+                    </select>
+                  </label>
+                  <label style={{ flex: 2 }}>
+                    Search Orders (Order ID, Customer Name, Phone)
+                    <input
+                      type="text"
+                      value={resPageSearch}
+                      onChange={(e) => setResPageSearch(e.target.value)}
+                      placeholder="Search in restaurant orders..."
+                    />
+                  </label>
+                </div>
+
+                <div className="stats-grid orders-card-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "20px" }}>
+                  <StatCard label="Delivered Subtotal" value={money(restaurantPageStats.deliveredTotal)} hint={`Delivered items subtotal · ${resPageDate}`} icon="✓" tone="green" />
+                  <StatCard label="Pending / On The Way" value={money(restaurantPageStats.pendingTotal)} hint={`Not delivered yet · ${resPageDate}`} icon="⌛" tone="orange" />
+                  <StatCard label="Cancelled Subtotal" value={money(restaurantPageStats.cancelledTotal)} hint={`Cancelled items subtotal · ${resPageDate}`} icon="×" tone="red" />
+                </div>
+
+                <div
+                  className="panel"
+                  style={{
+                    background: isRestaurantChecked ? "#f0fdf4" : "#ffffff",
+                    border: isRestaurantChecked ? "2px solid #16a34a" : "1px solid #e2e8f0",
+                    padding: "20px",
+                    borderRadius: "14px",
+                    marginBottom: "20px",
+                    boxShadow: "0 2px 7px rgba(20,33,59,0.03)",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "15px" }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: "11px", fontWeight: "700", color: "#64748b", letterSpacing: "0.5px" }}>
+                          PHYSICAL CASH COLLECTION ({resPageDate})
+                        </span>
+                        <button
+                          style={{
+                            background: "#eff6ff",
+                            color: "#3b82f6",
+                            border: "1px solid #bfdbfe",
+                            borderRadius: "6px",
+                            padding: "2px 8px",
+                            fontSize: "11px",
+                            fontWeight: "700",
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "4px",
+                          }}
+                          onClick={() => {
+                            setNoteModalEntry({
+                              type: "physical",
+                              entityType: "restaurant",
+                              entityId: restaurantId,
+                              entityName: selectedRestaurant?.name || "Restaurant",
+                              date: resPageDate,
+                              amount: restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0,
+                              note: restaurantPhysicalEntry ? restaurantPhysicalEntry.note || "" : "",
+                            });
+                            setNoteInputVal(restaurantPhysicalEntry ? restaurantPhysicalEntry.note || "" : "");
+                          }}
+                          title="View or Add Note"
+                        >
+                          📝 Note {restaurantPhysicalEntry?.note ? "•" : ""}
+                        </button>
+                      </div>
+                      <div style={{ fontSize: "30px", fontWeight: "900", color: "#0f172a", marginTop: "6px" }}>
+                        {money(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0)}
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#475569", marginTop: "4px", fontWeight: "700" }}>
+                        {isRestaurantChecked
+                          ? "✓ Checked & added to Check-In list (Auto or Manual saved)."
+                          : "✕ Unchecked: Click ✓ Auto or ✏️ Edit Amount to save & add to Check-In list."}
+                      </div>
+                      {restaurantPhysicalEntry?.note && (
+                        <div style={{ fontSize: "12px", color: "#475569", marginTop: "4px", fontStyle: "italic" }}>
+                          "{restaurantPhysicalEntry.note}"
+                        </div>
+                      )}
                     </div>
-                  )}
+
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                      <div
+                        style={{
+                          display: "inline-flex",
+                          borderRadius: "10px",
+                          overflow: "hidden",
+                          border: "2px solid #cbd5e1",
+                          background: "#f8fafc",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          disabled={saving || !restaurantId}
+                          onClick={() => handleToggleRestaurantCheck(true)}
+                          title="Tick: Auto-save Delivered + Pending/On The Way"
+                          style={{
+                            border: 0,
+                            padding: "0 14px",
+                            height: "38px",
+                            background: isRestaurantChecked ? "#16a34a" : "transparent",
+                            color: isRestaurantChecked ? "#ffffff" : "#475569",
+                            fontWeight: "900",
+                            fontSize: "13px",
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "5px",
+                          }}
+                        >
+                          ✓ Auto
+                        </button>
+                        <button
+                          type="button"
+                          disabled={saving || !restaurantId}
+                          onClick={() => handleToggleRestaurantCheck(false)}
+                          title="Cross: Uncheck / Manual entry mode"
+                          style={{
+                            border: 0,
+                            borderLeft: "1px solid #cbd5e1",
+                            padding: "0 14px",
+                            height: "38px",
+                            background: !isRestaurantChecked ? "#dc2626" : "transparent",
+                            color: !isRestaurantChecked ? "#ffffff" : "#475569",
+                            fontWeight: "900",
+                            fontSize: "13px",
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "5px",
+                          }}
+                        >
+                          ✕ Manual
+                        </button>
+                      </div>
+
+                      <button
+                        className="primary-btn"
+                        style={{
+                          background: "#10b981",
+                          height: "40px",
+                          padding: "0 16px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          fontSize: "13px",
+                          fontWeight: "800",
+                        }}
+                        onClick={() => {
+                          setEditModalData({
+                            entityType: "restaurant",
+                            entityId: restaurantId,
+                            entityName: selectedRestaurant?.name || "Restaurant",
+                            type: "physical",
+                            amount: restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0,
+                            date: resPageDate,
+                            title: "Edit Physical Cash Amount",
+                          });
+                          setEditAmountVal(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : "");
+                        }}
+                        title="Edit Amount Manually"
+                      >
+                        ✏️ Edit Amount
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-                  {/* TICK (AUTO SAVE) & CROSS (MANUAL) TOGGLE BUTTONS */}
-                  <div
-                    style={{
-                      display: "inline-flex",
-                      borderRadius: "10px",
-                      overflow: "hidden",
-                      border: "2px solid #cbd5e1",
-                      background: "#f8fafc",
-                    }}
-                  >
-                    <button
-                      type="button"
-                      disabled={saving || !restaurantId}
-                      onClick={() => handleToggleRestaurantCheck(true)}
-                      title="Tick: Auto-save Delivered + Pending/On The Way"
-                      style={{
-                        border: 0,
-                        padding: "0 14px",
-                        height: "38px",
-                        background: isRestaurantChecked ? "#16a34a" : "transparent",
-                        color: isRestaurantChecked ? "#ffffff" : "#475569",
-                        fontWeight: "900",
-                        fontSize: "13px",
-                        cursor: "pointer",
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "5px",
-                      }}
-                    >
-                      ✓ Auto
-                    </button>
-                    <button
-                      type="button"
-                      disabled={saving || !restaurantId}
-                      onClick={() => handleToggleRestaurantCheck(false)}
-                      title="Cross: Uncheck / Manual entry mode"
-                      style={{
-                        border: 0,
-                        borderLeft: "1px solid #cbd5e1",
-                        padding: "0 14px",
-                        height: "38px",
-                        background: !isRestaurantChecked ? "#dc2626" : "transparent",
-                        color: !isRestaurantChecked ? "#ffffff" : "#475569",
-                        fontWeight: "900",
-                        fontSize: "13px",
-                        cursor: "pointer",
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "5px",
-                      }}
-                    >
-                      ✕ Manual
-                    </button>
+                <div className="panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Restaurant Orders ({restaurantPageOrders.length})</h3>
+                      <p>Full order breakdown with items & prices. Amount counted specifically for: <strong>{selectedRestaurant?.name || "Selected Restaurant"}</strong></p>
+                    </div>
                   </div>
 
-                  <button
-                    className="primary-btn"
-                    style={{
-                      background: "#10b981",
-                      height: "40px",
-                      padding: "0 16px",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      fontSize: "13px",
-                      fontWeight: "800",
-                    }}
-                    onClick={() => {
-                      setEditModalData({
-                        entityType: "restaurant",
-                        entityId: restaurantId,
-                        entityName: selectedRestaurant?.name || "Restaurant",
-                        type: "physical",
-                        amount: restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : 0,
-                        date: resPageDate,
-                        title: "Edit Physical Cash Amount",
-                      });
-                      setEditAmountVal(restaurantPhysicalEntry ? restaurantPhysicalEntry.amount : "");
-                    }}
-                    title="Edit Amount Manually"
-                  >
-                    ✏️ Edit Amount
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panel-head">
-                <div>
-                  <h3>Restaurant Orders ({restaurantPageOrders.length})</h3>
-                  <p>Full order breakdown with items & prices. Amount counted specifically for: <strong>{selectedRestaurant?.name || "Selected Restaurant"}</strong></p>
-                </div>
-              </div>
-
-              <div className="table-wrap universal-card-list">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Order ID</th>
-                      <th>Customer</th>
-                      <th>Full Order Items & Multi-Restaurant Details</th>
-                      <th>Rider Details</th>
-                      <th>Time</th>
-                      <th>Status</th>
-                      <th className="right">This Restaurant Subtotal</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {restaurantPageOrders.map((order, idx) => {
-                      const matchedRider = riders.find((r) => String(r.id) === String(order.riderId));
-                      const riderName = matchedRider ? matchedRider.name || matchedRider.id : order.riderName || "—";
-                      const riderPhone = matchedRider ? matchedRider.phone || "N/A" : order.riderPhone || "N/A";
-                      const orderNote = order.note || order.orderNote || order.instructions || "";
-
-                      const borderColors = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
-                      const cardBorderColor = borderColors[idx % borderColors.length];
-
-                      return (
-                        <tr key={order.id} style={{ "--card-border-color": cardBorderColor }}>
-                          <td data-label="Order ID">
-                            <strong>#{order.orderId || order.id.slice(0, 8)}</strong>
-                          </td>
-                          <td data-label="Customer">
-                            <div className="card-value-block">
-                              <strong>{order.userName || "—"}</strong>
-                              <small className="cell-sub">{order.userPhone || ""}</small>
-                            </div>
-                          </td>
-                          <td data-label="Full Order Items & Multi-Restaurant Details">
-                            <div className="card-value-block">
-                              <OrderItemsBreakdown
-                                items={order.items}
-                                highlightRestaurantName={selectedRestaurant?.name}
-                                highlightRestaurantId={selectedRestaurant?.id}
-                              />
-                              {orderNote && (
-                                <div
-                                  style={{
-                                    marginTop: "10px",
-                                    padding: "10px 14px",
-                                    background: "#fef2f2",
-                                    border: "2px solid #ef4444",
-                                    borderRadius: "10px",
-                                    color: "#b91c1c",
-                                    fontWeight: "900",
-                                    fontSize: "15px",
-                                    lineHeight: "1.5",
-                                    boxShadow: "0 2px 6px rgba(239,68,68,0.15)",
-                                  }}
-                                >
-                                  🚨 <span style={{ textDecoration: "underline" }}>ORDER NOTE</span>: {orderNote}
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                          <td data-label="Rider Details">
-                            <div className="card-value-block">
-                              <strong>{riderName}</strong>
-                              <small className="cell-sub">Phone: {riderPhone}</small>
-                            </div>
-                          </td>
-                          <td data-label="Time">{formatDateTime(order.createdAt)}</td>
-                          <td data-label="Status">
-                            <span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>
-                              {order.orderStatus || "Pending"}
-                            </span>
-                          </td>
-                          <td data-label="This Restaurant Subtotal" className="right">
-                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                              <strong style={{ fontSize: "16px", color: "#047857" }}>{money(order.restaurantSubtotal)}</strong>
-                              <small style={{ fontSize: "11px", color: "#64748b" }}>Order Total: {money(orderAmount(order))}</small>
-                            </div>
-                          </td>
+                  <div className="table-wrap universal-card-list">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Order ID</th>
+                          <th>Customer</th>
+                          <th>Full Order Items & Multi-Restaurant Details</th>
+                          <th>Rider Details</th>
+                          <th>Time</th>
+                          <th>Status</th>
+                          <th className="right">This Restaurant Subtotal</th>
                         </tr>
-                      );
-                    })}
-                    {restaurantPageOrders.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="empty-cell">No orders found matching your search and filters.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody>
+                        {restaurantPageOrders.map((order, idx) => {
+                          const matchedRider = riders.find((r) => String(r.id) === String(order.riderId));
+                          const riderName = matchedRider ? matchedRider.name || matchedRider.id : order.riderName || "—";
+                          const riderPhone = matchedRider ? matchedRider.phone || "N/A" : order.riderPhone || "N/A";
+                          const orderNote = order.note || order.orderNote || order.instructions || "";
+
+                          const borderColors = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
+                          const cardBorderColor = borderColors[idx % borderColors.length];
+
+                          return (
+                            <tr key={order.id} style={{ "--card-border-color": cardBorderColor }}>
+                              <td data-label="Order ID">
+                                <strong>#{order.orderId || order.id.slice(0, 8)}</strong>
+                              </td>
+                              <td data-label="Customer">
+                                <div className="card-value-block">
+                                  <strong>{order.userName || "—"}</strong>
+                                  <small className="cell-sub">{order.userPhone || ""}</small>
+                                </div>
+                              </td>
+                              <td data-label="Full Order Items & Multi-Restaurant Details">
+                                <div className="card-value-block">
+                                  <OrderItemsBreakdown
+                                    items={order.items}
+                                    highlightRestaurantName={selectedRestaurant?.name}
+                                    highlightRestaurantId={selectedRestaurant?.id}
+                                  />
+                                  {orderNote && (
+                                    <div
+                                      style={{
+                                        marginTop: "10px",
+                                        padding: "10px 14px",
+                                        background: "#fef2f2",
+                                        border: "2px solid #ef4444",
+                                        borderRadius: "10px",
+                                        color: "#b91c1c",
+                                        fontWeight: "900",
+                                        fontSize: "15px",
+                                        lineHeight: "1.5",
+                                        boxShadow: "0 2px 6px rgba(239,68,68,0.15)",
+                                      }}
+                                    >
+                                      🚨 <span style={{ textDecoration: "underline" }}>ORDER NOTE</span>: {orderNote}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                              <td data-label="Rider Details">
+                                <div className="card-value-block">
+                                  <strong>{riderName}</strong>
+                                  <small className="cell-sub">Phone: {riderPhone}</small>
+                                </div>
+                              </td>
+                              <td data-label="Time">{formatDateTime(order.createdAt)}</td>
+                              <td data-label="Status">
+                                <span className={`status ${isDelivered(order) ? "good" : isCancelled(order) ? "bad" : "pending"}`}>
+                                  {order.orderStatus || "Pending"}
+                                </span>
+                              </td>
+                              <td data-label="This Restaurant Subtotal" className="right">
+                                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                                  <strong style={{ fontSize: "16px", color: "#047857" }}>{money(order.restaurantSubtotal)}</strong>
+                                  <small style={{ fontSize: "11px", color: "#64748b" }}>Order Total: {money(orderAmount(order))}</small>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {restaurantPageOrders.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="empty-cell">No orders found matching your search and filters.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* TAB 2: RESTAURANT DATE-RANGE SUMMARY */}
+            {restaurantTab === "summary" && (
+              <div key="res-tab-summary" className="tab-pane-animate">
+                <div className="filter-bar print-hide">
+                  <label>
+                    Restaurant
+                    <select value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)}>
+                      {restaurants.map((r) => (
+                        <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    From Date
+                    <input
+                      type="date"
+                      value={resSummaryStart}
+                      onChange={(e) => setResSummaryStart(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    To Date
+                    <input
+                      type="date"
+                      value={resSummaryEnd}
+                      min={resSummaryStart}
+                      onChange={(e) => setResSummaryEnd(e.target.value)}
+                    />
+                  </label>
+                  <div style={{ display: "flex", gap: "10px", alignItems: "flex-end", flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={() => window.print()}
+                      style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}
+                    >
+                      🖨️ Print / Download PDF
+                    </button>
+                  </div>
+                </div>
+
+                {firestoreRestaurantStatements.length > 0 && (
+                  <div className="panel print-hide">
+                    <div className="panel-head">
+                      <div>
+                        <h3>🔒 Saved Restaurant Statements Archive (Permanent & Locked)</h3>
+                        <p>Once saved, statements cannot be modified. View, Print PDF, Download CSV, or Delete anytime.</p>
+                      </div>
+                      <span className="count-pill">{firestoreRestaurantStatements.length} saved</span>
+                    </div>
+
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Restaurant Name</th>
+                            <th>From Date → To Date</th>
+                            <th>Total Delivered Subtotal</th>
+                            <th>Net Final Total</th>
+                            <th>Saved At</th>
+                            <th className="right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...firestoreRestaurantStatements]
+                            .sort((a, b) => String(b.savedAt || "").localeCompare(String(a.savedAt || "")))
+                            .map((st) => (
+                              <tr key={st.id}>
+                                <td><strong>{st.restaurantName}</strong></td>
+                                <td>{st.fromDate} to {st.toDate}</td>
+                                <td><strong>{money(st.baseTotal)}</strong></td>
+                                <td>
+                                  <strong style={{ color: "#047857", fontSize: "15px" }}>
+                                    {money(st.netTotal)}
+                                  </strong>
+                                </td>
+                                <td>{formatDateTime(st.savedAt)}</td>
+                                <td className="right" style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                                  <button
+                                    type="button"
+                                    className="primary-btn"
+                                    style={{ height: "32px", padding: "0 12px", fontSize: "11px", background: "#059669" }}
+                                    onClick={() => setActiveSavedResStatement(st)}
+                                  >
+                                    👁️ View / Print
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="primary-btn"
+                                    style={{ height: "32px", padding: "0 12px", fontSize: "11px", background: "#2563eb" }}
+                                    onClick={() => downloadRestaurantStatementCSV(st)}
+                                  >
+                                    📥 CSV
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="delete-btn"
+                                    style={{ height: "32px", padding: "0 12px", fontSize: "11px" }}
+                                    onClick={() => deleteSavedRestaurantStatement(st.id)}
+                                  >
+                                    🗑️ Delete
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {(() => {
+                  const isLockedView = Boolean(activeSavedResStatement);
+                  const displayData = isLockedView
+                    ? activeSavedResStatement
+                    : {
+                        restaurantName: selectedRestaurant?.name || "Selected Restaurant",
+                        fromDate: resSummaryStart,
+                        toDate: resSummaryEnd,
+                        deliveredCount: restaurantRangeSummary.deliveredCount,
+                        baseTotal: resSummaryCalculation.baseTotal,
+                        plusSum: resSummaryCalculation.plusSum,
+                        minusSum: resSummaryCalculation.minusSum,
+                        fineSum: resSummaryCalculation.fineSum ?? 0,
+                        netTotal: resSummaryCalculation.netTotal,
+                        adjustments: resAdjustments,
+                        orderNotes: restaurantRangeSummary.orderNotesList,
+                      };
+
+                  const resolvedFineSum = Number(displayData.fineSum ?? 0);
+
+                  return (
+                    <div
+                      className="printable-report-area history-print-box"
+                      style={{
+                        background: "#ffffff",
+                        padding: "26px",
+                        borderRadius: "16px",
+                        border: isLockedView ? "2px solid #059669" : "1px solid #e2e8f0",
+                        position: "relative",
+                      }}
+                    >
+                      <div
+                        className="pdf-watermark-logo"
+                        style={{
+                          display: "none",
+                          position: "absolute",
+                          top: "50%",
+                          left: "50%",
+                          transform: "translate(-50%, -50%)",
+                          opacity: 0.05,
+                          pointerEvents: "none",
+                          zIndex: 0,
+                        }}
+                      >
+                        <FoodishLogo size={360} />
+                      </div>
+
+                      {isLockedView && (
+                        <div
+                          className="print-hide"
+                          style={{
+                            background: "#ecfdf5",
+                            border: "1px solid #10b981",
+                            borderRadius: "10px",
+                            padding: "12px 16px",
+                            marginBottom: "18px",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                            gap: "10px",
+                          }}
+                        >
+                          <div style={{ fontSize: "13px", fontWeight: "800", color: "#065f46" }}>
+                            🔒 Viewing Permanently Saved Restaurant Statement (Read-Only / Locked)
+                          </div>
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              style={{ height: "34px", padding: "0 14px", fontSize: "12px", background: "#3b82f6" }}
+                              onClick={() => window.print()}
+                            >
+                              🖨️ Print / PDF
+                            </button>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              style={{ height: "34px", padding: "0 14px", fontSize: "12px", background: "#2563eb" }}
+                              onClick={() => downloadRestaurantStatementCSV(displayData)}
+                            >
+                              📥 Download CSV
+                            </button>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              style={{ height: "34px", padding: "0 14px", fontSize: "12px", background: "#64748b" }}
+                              onClick={() => setActiveSavedResStatement(null)}
+                            >
+                              ✕ Close Saved View
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="print-header" style={{ textAlign: "center", marginBottom: "22px", position: "relative", zIndex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
+                          <FoodishLogo size={34} />
+                          <span style={{ fontSize: "26px", fontWeight: "900", letterSpacing: "2px", color: "#10b981" }}>FOODISH</span>
+                        </div>
+                        <h1 style={{ fontSize: "26px", fontWeight: "900", color: "#0f172a", margin: "0 0 6px", textTransform: "uppercase" }}>
+                          {displayData.restaurantName} — Restaurant Statement
+                        </h1>
+                        <p style={{ fontSize: "14px", fontWeight: "700", color: "#475569", margin: 0 }}>
+                          From Date: {displayData.fromDate} To Date: {displayData.toDate} ({displayData.deliveredCount} Delivered Orders)
+                        </p>
+                      </div>
+
+                      <div
+                        style={{
+                          background: "linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%)",
+                          border: "2.5px solid #10b981",
+                          borderRadius: "16px",
+                          padding: "22px",
+                          marginBottom: "20px",
+                          position: "relative",
+                          zIndex: 1,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "14px" }}>
+                          <div>
+                            <div style={{ fontSize: "11px", fontWeight: "800", color: "#047857", letterSpacing: "0.8px", textTransform: "uppercase" }}>
+                              FROM {displayData.fromDate} TO {displayData.toDate}
+                            </div>
+                            <div style={{ fontSize: "18px", fontWeight: "900", color: "#0f172a", marginTop: "6px" }}>
+                              Total Delivered Items Amount: <span style={{ color: "#047857", fontSize: "22px" }}>{money(displayData.baseTotal)}</span>
+                            </div>
+                          </div>
+
+                          <div style={{ textAlign: "right" }}>
+                            <div style={{ fontSize: "11px", fontWeight: "800", color: "#065f46", textTransform: "uppercase" }}>
+                              NET FINAL PAYABLE TOTAL
+                            </div>
+                            <div style={{ fontSize: "34px", fontWeight: "900", color: "#14532d", lineHeight: "1.15" }}>
+                              {money(displayData.netTotal)}
+                            </div>
+                            <div style={{ fontSize: "11px", fontWeight: "700", color: "#475569", marginTop: "3px" }}>
+                              Base ({money(displayData.baseTotal)}) + Plus ({money(displayData.plusSum)}) - Minus ({money(displayData.minusSum)}) - Fine ({money(resolvedFineSum)})
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {!isLockedView && (
+                        <div
+                          className="print-hide"
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "16px",
+                            marginBottom: "22px",
+                          }}
+                        >
+                          <div
+                            style={{
+                              background: "#f8fafc",
+                              border: "1.5px solid #cbd5e1",
+                              borderRadius: "14px",
+                              padding: "16px",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "10px",
+                            }}
+                          >
+                            <div style={{ fontSize: "14px", fontWeight: "800", color: "#0f172a" }}>
+                              ➕ / ➖ Plus & Minus (Total Delivered Amount theke jog/biyog)
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px" }}>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                placeholder="Amount (৳)"
+                                value={resAdjAmountInput}
+                                onChange={(e) => setResAdjAmountInput(e.target.value)}
+                                style={{
+                                  height: "42px",
+                                  borderRadius: "8px",
+                                  border: "1px solid #cbd5e1",
+                                  padding: "0 12px",
+                                  fontSize: "15px",
+                                  fontWeight: "800",
+                                  background: "#ffffff",
+                                }}
+                              />
+                              <input
+                                type="text"
+                                placeholder="Note likhun..."
+                                value={resAdjNoteInput}
+                                onChange={(e) => setResAdjNoteInput(e.target.value)}
+                                style={{
+                                  height: "42px",
+                                  borderRadius: "8px",
+                                  border: "1px solid #cbd5e1",
+                                  padding: "0 12px",
+                                  fontSize: "13px",
+                                  background: "#ffffff",
+                                }}
+                              />
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                              <button
+                                type="button"
+                                className="primary-btn"
+                                onClick={() => handleAddRestaurantAdjustment("plus")}
+                                style={{ height: "42px", background: "#16a34a", fontSize: "14px" }}
+                              >
+                                + Plus
+                              </button>
+                              <button
+                                type="button"
+                                className="primary-btn"
+                                onClick={() => handleAddRestaurantAdjustment("minus")}
+                                style={{ height: "42px", background: "#ea580c", fontSize: "14px" }}
+                              >
+                                - Minus
+                              </button>
+                            </div>
+                          </div>
+
+                          <div
+                            style={{
+                              background: "#fef2f2",
+                              border: "1.5px solid #fecaca",
+                              borderRadius: "14px",
+                              padding: "16px",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "10px",
+                            }}
+                          >
+                            <div style={{ fontSize: "14px", fontWeight: "800", color: "#991b1b" }}>
+                              ⚠️ Fine Box (Total Delivered Amount theke minus hobe)
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px" }}>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                placeholder="Fine Amount (৳)"
+                                value={resFineAmountInput}
+                                onChange={(e) => setResFineAmountInput(e.target.value)}
+                                style={{
+                                  height: "42px",
+                                  borderRadius: "8px",
+                                  border: "1px solid #fca5a5",
+                                  padding: "0 12px",
+                                  fontSize: "15px",
+                                  fontWeight: "800",
+                                  background: "#ffffff",
+                                }}
+                              />
+                              <input
+                                type="text"
+                                placeholder="Fine Note likhun..."
+                                value={resFineNoteInput}
+                                onChange={(e) => setResFineNoteInput(e.target.value)}
+                                style={{
+                                  height: "42px",
+                                  borderRadius: "8px",
+                                  border: "1px solid #fca5a5",
+                                  padding: "0 12px",
+                                  fontSize: "13px",
+                                  background: "#ffffff",
+                                }}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              onClick={() => handleAddRestaurantAdjustment("fine")}
+                              style={{ height: "42px", background: "#dc2626", fontSize: "14px" }}
+                            >
+                              - Minus Fine
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div
+                        className="panel"
+                        style={{
+                          border: "1px solid #e2e8f0",
+                          padding: "16px",
+                          boxShadow: "none",
+                          position: "relative",
+                          zIndex: 1,
+                          marginBottom: "22px",
+                        }}
+                      >
+                        <div className="panel-head" style={{ marginBottom: "12px" }}>
+                          <div>
+                            <h3>📋 Serial-Wise Calculation & Notes</h3>
+                            <p>Total Delivered Amount with serial-wise Plus (+), Minus (-), Fine, and Notes</p>
+                          </div>
+                        </div>
+
+                        <div className="table-wrap">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>SL</th>
+                                <th>Type</th>
+                                <th>Amount</th>
+                                <th>Note</th>
+                                {!isLockedView && <th className="right print-hide">Action</th>}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr>
+                                <td><strong>1</strong></td>
+                                <td>
+                                  <span className="status good">Total Delivered Items Amount</span>
+                                </td>
+                                <td><strong>{money(displayData.baseTotal)}</strong></td>
+                                <td style={{ whiteSpace: "normal" }}>
+                                  Total delivered items subtotal from {displayData.fromDate} to {displayData.toDate}
+                                </td>
+                                {!isLockedView && <td className="right print-hide">—</td>}
+                              </tr>
+
+                              {(displayData.adjustments || []).map((adj, idx) => {
+                                const serialNum = 2 + idx;
+                                const isPlus = adj.type === "plus";
+                                const isFine = adj.type === "fine";
+                                return (
+                                  <tr key={adj.id}>
+                                    <td><strong>{serialNum}</strong></td>
+                                    <td>
+                                      <span className={`status ${isPlus ? "good" : "bad"}`}>
+                                        {isPlus ? "+ Plus" : isFine ? "Fine (-)" : "- Minus"}
+                                      </span>
+                                    </td>
+                                    <td>
+                                      <strong style={{ color: isPlus ? "#16a34a" : "#dc2626" }}>
+                                        {isPlus ? "+" : "-"} {money(adj.amount)}
+                                      </strong>
+                                    </td>
+                                    <td style={{ whiteSpace: "normal" }}>{adj.note || "—"}</td>
+                                    {!isLockedView && (
+                                      <td className="right print-hide">
+                                        <button
+                                          type="button"
+                                          className="delete-btn"
+                                          style={{ padding: "5px 10px", fontSize: "11px" }}
+                                          onClick={() => handleRemoveRestaurantAdjustment(adj.id)}
+                                        >
+                                          Remove
+                                        </button>
+                                      </td>
+                                    )}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot>
+                              <tr>
+                                <th colSpan={2}>FINAL NET PAYABLE TOTAL</th>
+                                <th colSpan={!isLockedView ? 3 : 2} style={{ fontSize: "16px", color: "#14532d" }}>
+                                  {money(displayData.netTotal)}
+                                </th>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div>
+
+                      <div
+                        className="panel"
+                        style={{
+                          background: "#ffffff",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: "14px",
+                          padding: "18px",
+                          boxShadow: "none",
+                          position: "relative",
+                          zIndex: 1,
+                        }}
+                      >
+                        <div className="panel-head" style={{ marginBottom: "12px" }}>
+                          <div>
+                            <h3>🚨 Date-Wise Order Notes ({displayData.fromDate} to {displayData.toDate})</h3>
+                            <p>
+                              All orders with notes for {displayData.restaurantName} ·{" "}
+                              <strong style={{ color: "#2563eb" }}>
+                                (Click kore dhore rakhle full order details dekhabe)
+                              </strong>
+                            </p>
+                          </div>
+                          <span className="count-pill">{(displayData.orderNotes || []).length} order notes</span>
+                        </div>
+
+                        {(displayData.orderNotes || []).length > 0 ? (
+                          <div className="table-wrap">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>#</th>
+                                  <th>Date</th>
+                                  <th>Order ID</th>
+                                  <th>Order Status</th>
+                                  <th>Order Note (Hold for Full Details)</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(displayData.orderNotes || []).map((item, idx) => (
+                                  <tr
+                                    key={item.id || idx}
+                                    className="holdable-note-row"
+                                    title="Click and hold to view full order details"
+                                    onMouseDown={() => startNoteLongPress(item)}
+                                    onMouseUp={cancelNoteLongPress}
+                                    onMouseLeave={cancelNoteLongPress}
+                                    onTouchStart={() => startNoteLongPress(item)}
+                                    onTouchEnd={cancelNoteLongPress}
+                                    onTouchCancel={cancelNoteLongPress}
+                                    onContextMenu={(e) => {
+                                      e.preventDefault();
+                                      setOrderDetailModal(item);
+                                    }}
+                                  >
+                                    <td><strong>{idx + 1}</strong></td>
+                                    <td><strong>{item.date}</strong></td>
+                                    <td><strong>#{item.orderId}</strong></td>
+                                    <td>
+                                      <span
+                                        className={`status ${
+                                          item.isDelivered ? "good" : item.isCancelled ? "bad" : "pending"
+                                        }`}
+                                      >
+                                        {item.status}
+                                      </span>
+                                    </td>
+                                    <td style={{ whiteSpace: "normal", color: "#b91c1c", fontWeight: "800" }}>
+                                      {item.note}{" "}
+                                      <span
+                                        className="print-hide"
+                                        style={{
+                                          fontSize: "10px",
+                                          background: "#eff6ff",
+                                          color: "#1d4ed8",
+                                          padding: "2px 7px",
+                                          borderRadius: "6px",
+                                          marginLeft: "6px",
+                                          fontWeight: "700",
+                                        }}
+                                      >
+                                        Hold to View Order
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div style={{ textAlign: "center", color: "#9aa5b5", padding: "20px", fontSize: "13px" }}>
+                            No order notes found between {displayData.fromDate} and {displayData.toDate}.
+                          </div>
+                        )}
+                      </div>
+
+                      {!isLockedView && (
+                        <div
+                          className="print-hide"
+                          style={{
+                            marginTop: "22px",
+                            padding: "18px",
+                            background: "#f8fafc",
+                            border: "2px dashed #10b981",
+                            borderRadius: "14px",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                            gap: "12px",
+                          }}
+                        >
+                          <div>
+                            <strong style={{ fontSize: "14px", color: "#0f172a", display: "block" }}>
+                              Save Permanent Statement for {displayData.restaurantName} ({displayData.fromDate} to {displayData.toDate})
+                            </strong>
+                            <span style={{ fontSize: "12px", color: "#64748b" }}>
+                              Once saved to database, this statement will be permanently locked and downloadable/printable anytime.
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className="primary-btn"
+                            disabled={saving || !selectedRestaurant}
+                            onClick={saveRestaurantStatementToDatabase}
+                            style={{ height: "46px", padding: "0 24px", background: "#059669", fontSize: "14px" }}
+                          >
+                            💾 Save Statement to Database
+                          </button>
+                        </div>
+                      )}
+
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "60px", paddingTop: "16px", position: "relative", zIndex: 1 }}>
+                        <div style={{ textAlign: "center", width: "200px" }}>
+                          <div style={{ borderTop: "2px solid #0f172a", marginBottom: "6px" }} />
+                          <strong style={{ fontSize: "13px", color: "#0f172a" }}>Restaurant Owner Sign</strong>
+                        </div>
+                        <div style={{ textAlign: "center", width: "200px" }}>
+                          <div style={{ borderTop: "2px solid #0f172a", marginBottom: "6px" }} />
+                          <strong style={{ fontSize: "13px", color: "#0f172a" }}>Manager Sign</strong>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </section>
         )}
 
         {/* 4. RIDERS PAGE */}
         {page === "riders" && (
-          <section className="content">
+          <section key="page-riders" className="content page-animate">
             <div className="section-heading print-hide" style={{ marginBottom: "14px" }}>
               <div>
                 <h2>Rider accounts & Orders</h2>
@@ -2691,7 +3541,6 @@ function App() {
               </div>
             </div>
 
-            {/* RIDER PAGE TOP TABS: Daily Accounts vs Summary */}
             <div
               className="tabs print-hide"
               style={{
@@ -2723,7 +3572,7 @@ function App() {
 
             {/* TAB 1: DAILY ACCOUNTS & ORDERS */}
             {riderTab === "daily" && (
-              <>
+              <div key="rider-tab-daily" className="tab-pane-animate">
                 <div className="filter-bar">
                   <label>
                     Rider
@@ -2758,7 +3607,6 @@ function App() {
                   </label>
                 </div>
 
-                {/* ১. বড় বক্স: ৪টি মূল হিসাব + হাইলাইট করা অ্যামাউন্ট ফিল্ড */}
                 <div
                   className="panel"
                   style={{
@@ -2874,7 +3722,6 @@ function App() {
                   </div>
                 </div>
 
-                {/* ২. নিচে ৬টি আলাদা Editable ও Saveable বক্স (Cash Collect, bKash, Nagad, Fine, Salary, Payment) */}
                 <div
                   style={{
                     display: "grid",
@@ -2965,7 +3812,6 @@ function App() {
                   ))}
                 </div>
 
-                {/* ৩. আলাদা Note Box + ডানপাশে Rider Checked (✓) টিক মার্ক ফিল্ড */}
                 <div
                   className="panel"
                   style={{
@@ -3006,7 +3852,6 @@ function App() {
                   />
 
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
-                    {/* RIDER CHECKED TICK MARK FIELD */}
                     <label
                       style={{
                         display: "inline-flex",
@@ -3150,12 +3995,12 @@ function App() {
                     </table>
                   </div>
                 </div>
-              </>
+              </div>
             )}
 
-            {/* TAB 2: RIDER DATE-RANGE SUMMARY (ONLY TOTAL COD CASH BOX + PLUS/MINUS + SEPARATE FINE BOX + ORDER NOTES + PERMANENT SAVE) */}
+            {/* TAB 2: RIDER DATE-RANGE SUMMARY */}
             {riderTab === "summary" && (
-              <>
+              <div key="rider-tab-summary" className="tab-pane-animate">
                 <div className="filter-bar print-hide">
                   <label>
                     Rider
@@ -3194,7 +4039,6 @@ function App() {
                   </div>
                 </div>
 
-                {/* PERMANENTLY SAVED RIDER STATEMENTS ARCHIVE */}
                 {firestoreRiderStatements.length > 0 && (
                   <div className="panel print-hide">
                     <div className="panel-head">
@@ -3265,7 +4109,6 @@ function App() {
                   </div>
                 )}
 
-                {/* ACTIVE STATEMENT (EITHER LOCKED ARCHIVE VIEW OR LIVE BUILDER) */}
                 {(() => {
                   const isLockedView = Boolean(activeSavedRiderStatement);
                   const displayData = isLockedView
@@ -3313,7 +4156,6 @@ function App() {
                         <FoodishLogo size={360} />
                       </div>
 
-                      {/* LOCKED ARCHIVE BANNER */}
                       {isLockedView && (
                         <div
                           className="print-hide"
@@ -3362,7 +4204,6 @@ function App() {
                         </div>
                       )}
 
-                      {/* PDF / STATEMENT HEADER */}
                       <div className="print-header" style={{ textAlign: "center", marginBottom: "22px", position: "relative", zIndex: 1 }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
                           <FoodishLogo size={34} />
@@ -3376,7 +4217,6 @@ function App() {
                         </p>
                       </div>
 
-                      {/* SINGLE TOTAL BOX (ONLY TOTAL COD CASH AMOUNT) */}
                       <div
                         style={{
                           background: "linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%)",
@@ -3412,7 +4252,6 @@ function App() {
                         </div>
                       </div>
 
-                      {/* CONTROLS: + PLUS / - MINUS BOX & SEPARATE FINE BOX BELOW IT */}
                       {!isLockedView && (
                         <div
                           className="print-hide"
@@ -3423,7 +4262,6 @@ function App() {
                             marginBottom: "22px",
                           }}
                         >
-                          {/* 1. PLUS (+) & MINUS (-) BOX */}
                           <div
                             style={{
                               background: "#f8fafc",
@@ -3491,7 +4329,6 @@ function App() {
                             </div>
                           </div>
 
-                          {/* 2. SEPARATE FINE BOX BELOW */}
                           <div
                             style={{
                               background: "#fef2f2",
@@ -3551,7 +4388,6 @@ function App() {
                         </div>
                       )}
 
-                      {/* SERIAL-WISE LEDGER TABLE (TOTAL COD CASH + PLUS + MINUS + FINE WITH SIDE NOTES) */}
                       <div
                         className="panel"
                         style={{
@@ -3640,7 +4476,6 @@ function App() {
                         </div>
                       </div>
 
-                      {/* BOTTOM: DATE-WISE ORDER NOTES LIST (FROM DATE TO TO DATE) */}
                       <div
                         className="panel"
                         style={{
@@ -3656,7 +4491,12 @@ function App() {
                         <div className="panel-head" style={{ marginBottom: "12px" }}>
                           <div>
                             <h3>🚨 Date-Wise Order Notes ({displayData.fromDate} to {displayData.toDate})</h3>
-                            <p>All orders with notes assigned to {displayData.riderName}</p>
+                            <p>
+                              All orders with notes assigned to {displayData.riderName} ·{" "}
+                              <strong style={{ color: "#2563eb" }}>
+                                (Click kore dhore rakhle full order details dekhabe)
+                              </strong>
+                            </p>
                           </div>
                           <span className="count-pill">{(displayData.orderNotes || []).length} order notes</span>
                         </div>
@@ -3670,12 +4510,26 @@ function App() {
                                   <th>Date</th>
                                   <th>Order ID</th>
                                   <th>Order Status</th>
-                                  <th>Order Note</th>
+                                  <th>Order Note (Hold for Full Details)</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {(displayData.orderNotes || []).map((item, idx) => (
-                                  <tr key={item.id || idx}>
+                                  <tr
+                                    key={item.id || idx}
+                                    className="holdable-note-row"
+                                    title="Click and hold to view full order details"
+                                    onMouseDown={() => startNoteLongPress(item)}
+                                    onMouseUp={cancelNoteLongPress}
+                                    onMouseLeave={cancelNoteLongPress}
+                                    onTouchStart={() => startNoteLongPress(item)}
+                                    onTouchEnd={cancelNoteLongPress}
+                                    onTouchCancel={cancelNoteLongPress}
+                                    onContextMenu={(e) => {
+                                      e.preventDefault();
+                                      setOrderDetailModal(item);
+                                    }}
+                                  >
                                     <td><strong>{idx + 1}</strong></td>
                                     <td><strong>{item.date}</strong></td>
                                     <td><strong>#{item.orderId}</strong></td>
@@ -3689,7 +4543,21 @@ function App() {
                                       </span>
                                     </td>
                                     <td style={{ whiteSpace: "normal", color: "#b91c1c", fontWeight: "800" }}>
-                                      {item.note}
+                                      {item.note}{" "}
+                                      <span
+                                        className="print-hide"
+                                        style={{
+                                          fontSize: "10px",
+                                          background: "#eff6ff",
+                                          color: "#1d4ed8",
+                                          padding: "2px 7px",
+                                          borderRadius: "6px",
+                                          marginLeft: "6px",
+                                          fontWeight: "700",
+                                        }}
+                                      >
+                                        Hold to View Order
+                                      </span>
                                     </td>
                                   </tr>
                                 ))}
@@ -3703,7 +4571,6 @@ function App() {
                         )}
                       </div>
 
-                      {/* SAVE STATEMENT TO DATABASE BUTTON (BOTTOM) */}
                       {!isLockedView && (
                         <div
                           className="print-hide"
@@ -3740,7 +4607,6 @@ function App() {
                         </div>
                       )}
 
-                      {/* Print Sign Area */}
                       <div style={{ display: "flex", justifyContent: "space-between", marginTop: "60px", paddingTop: "16px", position: "relative", zIndex: 1 }}>
                         <div style={{ textAlign: "center", width: "200px" }}>
                           <div style={{ borderTop: "2px solid #0f172a", marginBottom: "6px" }} />
@@ -3754,153 +4620,14 @@ function App() {
                     </div>
                   );
                 })()}
-              </>
+              </div>
             )}
           </section>
         )}
 
-        {/* 5. ONLINE ACCOUNTS (bKash, Nagad, Rocket) */}
-        {page === "online" && (
-          <section className="content">
-            <div className="section-heading">
-              <div>
-                <h2>Online accounts</h2>
-                <p>bKash, Nagad, and Rocket transaction ledger</p>
-              </div>
-            </div>
-            <div className="stats-grid" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
-              <StatCard label="Total bKash" value={money(bKashTotal)} hint="All saved entries" icon="B" tone="pink" />
-              <StatCard label="Total Nagad" value={money(nagadTotal)} hint="All saved entries" icon="N" tone="orange" />
-              <StatCard label="Total Rocket" value={money(rocketTotal)} hint="All saved entries" icon="R" tone="purple" />
-              <StatCard label="Grand total" value={money(bKashTotal + nagadTotal + rocketTotal)} hint="bKash + Nagad + Rocket" icon="৳" tone="green" />
-            </div>
-            <div className="panel">
-              <div className="tabs">
-                <button className={onlineMethod === "bKash" ? "selected" : ""} onClick={() => setOnlineMethod("bKash")}>bKash</button>
-                <button className={onlineMethod === "Nagad" ? "selected" : ""} onClick={() => setOnlineMethod("Nagad")}>Nagad</button>
-                <button className={onlineMethod === "Rocket" ? "selected" : ""} onClick={() => setOnlineMethod("Rocket")}>Rocket</button>
-              </div>
-              <div className="filter-bar compact">
-                <label>
-                  Entry date
-                  <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
-                </label>
-              </div>
-              <form className="entry-form" onSubmit={saveOnlineEntry}>
-                <label>
-                  Amount (৳)
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={onlineAmount}
-                    onChange={(e) => setOnlineAmount(e.target.value)}
-                    placeholder="0.00"
-                    required
-                  />
-                </label>
-                <label className="note-field">
-                  Note
-                  <input
-                    value={onlineNote}
-                    onChange={(e) => setOnlineNote(e.target.value)}
-                    placeholder="Optional transaction note"
-                  />
-                </label>
-                <button className="primary-btn" disabled={saving}>
-                  {saving ? "Saving…" : `Add ${onlineMethod} entry`}
-                </button>
-              </form>
-              <div className="panel-head list-heading">
-                <div>
-                  <h3>{onlineMethod} entries</h3>
-                  <p>{selectedDate}</p>
-                </div>
-                <span className="count-pill">{filteredOnline.length} entries</span>
-              </div>
-
-              <div className="online-boxes-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "15px", marginTop: "20px" }}>
-                {filteredOnline.map((entry, idx) => {
-                  const colors = ["#ec4899", "#f59e0b", "#8b5cf6", "#3b82f6", "#10b981"];
-                  const bColor = colors[idx % colors.length];
-                  return (
-                    <div
-                      key={entry.id}
-                      style={{
-                        background: "#fff",
-                        border: `2px solid ${bColor}`,
-                        borderRadius: "12px",
-                        padding: "14px",
-                        boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
-                        position: "relative",
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: "6px" }}>
-                        <span style={{ fontSize: "10px", fontWeight: "800", textTransform: "uppercase", color: "#64748b" }}>
-                          {entry.method || onlineMethod}
-                        </span>
-                        <span style={{ fontSize: "10px", fontWeight: "700", color: "#334155" }}>
-                          {formatDateTime(entry.createdAt || entry.date)}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: "22px", fontWeight: "900", color: "#0f172a", marginBottom: "4px" }}>
-                        {money(entry.amount)}
-                      </div>
-                      <div style={{ fontSize: "11px", color: "#475569", fontStyle: "italic", marginBottom: "10px" }}>
-                        "{entry.note || "No note"}"
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                        <button
-                          type="button"
-                          style={{
-                            background: "#fff1f0",
-                            color: "#d35b54",
-                            border: 0,
-                            borderRadius: "6px",
-                            padding: "5px 10px",
-                            fontSize: "10px",
-                            fontWeight: "800",
-                            cursor: "pointer",
-                            zIndex: 10,
-                            position: "relative",
-                          }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDeleteModalData({
-                              collectionName: COLLECTIONS.online,
-                              id: entry.id,
-                              title: "Delete Online Entry",
-                              message: "Are you sure you want to delete this online entry?",
-                              onConfirm: async () => {
-                                try {
-                                  await deleteDoc(doc(db, COLLECTIONS.online, entry.id));
-                                  setNotice({ type: "success", text: "Entry deleted successfully." });
-                                } catch (err) {
-                                  setNotice({ type: "error", text: `Delete failed: ${err.message}` });
-                                }
-                              },
-                            });
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-                {filteredOnline.length === 0 && (
-                  <div style={{ gridColumn: "1 / -1", textAlign: "center", color: "#9aa5b5", padding: "30px" }}>
-                    No {onlineMethod} entries found for {selectedDate}.
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* 6. HISTORY & REPORTS */}
+        {/* 5. HISTORY & REPORTS */}
         {page === "history" && (
-          <section className="content">
+          <section key="page-history" className="content page-animate">
             <div className="section-heading">
               <div>
                 <h2>History & reports</h2>
@@ -4235,59 +4962,161 @@ function App() {
           </section>
         )}
 
-        {/* 7. BULK RESTAURANT MANAGEMENT */}
+        {/* 6. BULK RESTAURANT MANAGEMENT & DELIVERY CHARGE COMBINED */}
         {page === "bulk" && (
-          <section className="content">
+          <section key="page-bulk" className="content page-animate">
             <div className="section-heading">
               <div>
-                <h2>Bulk Restaurant Management</h2>
-                <p>Multi-select restaurants and apply open status, priority 0, and all locations/sub-locations instantly</p>
+                <h2>Bulk Restaurant Management & Delivery Charge</h2>
+                <p>
+                  Multi-select restaurants to Turn On/Off and manage Delivery Charge. While turning ON, if a restaurant&apos;s delivery charge is ৳0, the entered delivery charge will automatically be added.
+                </p>
               </div>
             </div>
 
             <div className="panel bulk-action-panel">
-              <div className="panel-head">
+              <div className="panel-head" style={{ flexWrap: "wrap", gap: "12px" }}>
                 <div>
-                  <h3>Restaurant Controls</h3>
-                  <p>Select restaurants below and trigger Turn On or Turn Off</p>
+                  <h3>Restaurant Controls & Delivery Charge</h3>
+                  <p>Select restaurants below, set delivery charge (৳), and trigger Turn On, Turn Off, or Save Charge</p>
                 </div>
                 <div className="bulk-actions-btns">
-                  <button type="button" className="primary-btn on-btn" onClick={() => handleBulkRestaurantAction(true)} disabled={saving}>
-                    {saving ? "Processing..." : "Turn On (Open, Priority 0, All Locations)"}
+                  <button
+                    type="button"
+                    className="primary-btn on-btn"
+                    onClick={() => handleBulkRestaurantAction(true)}
+                    disabled={saving}
+                  >
+                    {saving ? "Processing..." : "Turn On (Open, Priority 0, Locations & Auto-Add Charge if 0)"}
                   </button>
-                  <button type="button" className="primary-btn off-btn" onClick={() => handleBulkRestaurantAction(false)} disabled={saving}>
+                  <button
+                    type="button"
+                    className="primary-btn off-btn"
+                    onClick={() => handleBulkRestaurantAction(false)}
+                    disabled={saving}
+                  >
                     {saving ? "Processing..." : "Turn Off (Close, Priority 1000)"}
                   </button>
                 </div>
               </div>
+
+              <form
+                onSubmit={handleBulkSaveDeliveryCharge}
+                style={{
+                  background: "#ffffff",
+                  border: "1.5px solid #cbd5e1",
+                  borderRadius: "12px",
+                  padding: "16px",
+                  marginBottom: "18px",
+                  display: "flex",
+                  alignItems: "flex-end",
+                  gap: "12px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <label style={{ display: "grid", gap: "6px", fontSize: "11px", fontWeight: "800", color: "#334155", minWidth: "220px", flex: "1 1 220px" }}>
+                  Delivery Charge (৳) — (Auto-added on Turn On if current charge is 0)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={bulkDeliveryChargeInput}
+                    onChange={(e) => setBulkDeliveryChargeInput(e.target.value)}
+                    placeholder="0.00"
+                    style={{
+                      height: "42px",
+                      border: "1.5px solid #10b981",
+                      borderRadius: "8px",
+                      padding: "0 12px",
+                      fontSize: "15px",
+                      fontWeight: "800",
+                      color: "#0f172a",
+                      outline: "none",
+                    }}
+                  />
+                </label>
+
+                <button
+                  type="submit"
+                  className="primary-btn"
+                  disabled={saving || !selectedRestaurantIds.length}
+                  style={{ height: "42px", background: "#2563eb" }}
+                >
+                  💾 Save Delivery Charge ({selectedRestaurantIds.length} selected)
+                </button>
+
+                <label style={{ display: "grid", gap: "6px", fontSize: "11px", fontWeight: "800", color: "#334155", minWidth: "200px", flex: "1 1 200px" }}>
+                  Search Restaurant
+                  <input
+                    type="text"
+                    value={bulkSearch}
+                    onChange={(e) => setBulkSearch(e.target.value)}
+                    placeholder="Filter restaurants..."
+                    style={{
+                      height: "42px",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: "8px",
+                      padding: "0 12px",
+                      fontSize: "13px",
+                      outline: "none",
+                    }}
+                  />
+                </label>
+              </form>
+
               <div className="selection-controls">
                 <button type="button" className="text-btn" onClick={selectAllRestaurants}>Select All</button>
                 <button type="button" className="text-btn" onClick={clearSelectedRestaurants}>Clear Selection</button>
                 <span className="count-pill">{selectedRestaurantIds.length} restaurants selected</span>
               </div>
-              <div className="multi-select-grid">
-                {restaurants.map((res) => {
-                  const isSelected = selectedRestaurantIds.includes(res.id);
-                  return (
-                    <div
-                      key={res.id}
-                      className={`restaurant-checkbox-card ${isSelected ? "selected" : ""}`}
-                      onClick={() => toggleRestaurantSelection(res.id)}
-                    >
-                      <input type="checkbox" checked={isSelected} onChange={() => {}} />
-                      <span>{res.name || res.id}</span>
-                      <small className="cell-sub">Status: {res.open || "N/A"} | Priority: {res.priority ?? "N/A"}</small>
-                    </div>
-                  );
-                })}
+
+              <div className="multi-select-grid" style={{ maxHeight: "460px" }}>
+                {restaurants
+                  .filter((res) =>
+                    !bulkSearch
+                      ? true
+                      : normalized(res.name || res.restaurantName || res.id).includes(normalized(bulkSearch))
+                  )
+                  .map((res) => {
+                    const isSelected = selectedRestaurantIds.includes(res.id);
+                    const currentCharge = Number(res.hiddenDeliveryCharge ?? 0);
+                    return (
+                      <div
+                        key={res.id}
+                        className={`restaurant-checkbox-card ${isSelected ? "selected" : ""}`}
+                        onClick={() => toggleRestaurantSelection(res.id)}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "6px" }}>
+                          <input type="checkbox" checked={isSelected} onChange={() => {}} />
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: "800",
+                              padding: "2px 8px",
+                              borderRadius: "12px",
+                              background: currentCharge > 0 ? "#dcfce7" : "#f1f5f9",
+                              color: currentCharge > 0 ? "#15803d" : "#64748b",
+                            }}
+                          >
+                            Charge: {money(currentCharge)}
+                          </span>
+                        </div>
+                        <span>{res.name || res.restaurantName || res.id}</span>
+                        <small className="cell-sub">
+                          Status: <strong>{res.open || "N/A"}</strong> | Priority: {res.priority ?? "N/A"}
+                        </small>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
           </section>
         )}
 
-        {/* 8. PAPER WORK & REPORTS */}
+        {/* 7. PAPER WORK & REPORTS */}
         {page === "paperwork" && (
-          <section className="content">
+          <section key="page-paperwork" className="content page-animate">
             <div className="section-heading print-hide">
               <div>
                 <h2>Paper Work & Profit Calculation</h2>
@@ -4516,105 +5345,201 @@ function App() {
           </section>
         )}
 
-        {/* 9. DELIVERY CHARGE PAGE */}
-        {page === "delivery-charge" && (
-          <section className="content">
-            <div className="section-heading">
-              <div>
-                <div className="eyebrow" style={{ marginBottom: 8 }}>RESTAURANT SETTINGS / DELIVERY</div>
-                <h2>Restaurant delivery charge</h2>
-                <p>Manage an additional delivery charge for each restaurant. Changes sync to the customer checkout configuration.</p>
-              </div>
-              <span className="date-label">Live Firestore settings</span>
-            </div>
-
-            <div className="stats-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
-              <StatCard label="Restaurants available" value={restaurants.length} hint="Customer-facing restaurant records" icon="▤" tone="blue" />
-              <StatCard label="Charges configured" value={restaurants.filter((r) => Number(r.hiddenDeliveryCharge || 0) > 0).length} hint="Restaurants with an extra charge" icon="৳" tone="green" />
-              <StatCard label="No extra charge" value={restaurants.filter((r) => Number(r.hiddenDeliveryCharge || 0) <= 0).length} hint="Hidden delivery charge is ৳0" icon="✓" tone="purple" />
-            </div>
-
-            <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ padding: "22px 24px", background: "linear-gradient(120deg,#10243a 0%,#1d4050 58%,#176c59 100%)", color: "#fff" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 9 }}>
-                  <span style={{ width: 36, height: 36, borderRadius: 11, background: "#ffffff20", display: "grid", placeItems: "center", fontSize: 19 }}>৳</span>
-                  <span style={{ fontSize: 11, letterSpacing: 1.4, fontWeight: 800, color: "#b8d8d1" }}>PER-RESTAURANT CONFIGURATION</span>
-                </div>
-                <h3 style={{ margin: 0, font: "800 21px 'Plus Jakarta Sans'" }}>Set hidden delivery charge</h3>
-                <p style={{ margin: "7px 0 0", color: "#d0e2e0", fontSize: 12, lineHeight: 1.6 }}>Choose a restaurant and set its additional delivery amount in BDT. The value is stored directly in its `mini_restaurants` document.</p>
-              </div>
-
-              <form onSubmit={saveHiddenDeliveryCharge} style={{ padding: 24 }}>
-                <div className="filter-bar" style={{ border: 0, padding: 0, margin: 0, background: "transparent", alignItems: "end" }}>
-                  <label style={{ flex: "2 1 260px" }}>
-                    Select restaurant
-                    <select value={chargeRestaurantId} onChange={(e) => setChargeRestaurantId(e.target.value)} required>
-                      <option value="">Choose a restaurant</option>
-                      {restaurants.map((restaurant) => (
-                        <option key={restaurant.id} value={restaurant.id}>{restaurant.name || restaurant.restaurantName || restaurant.id}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label style={{ flex: "1 1 190px" }}>
-                    Hidden delivery charge (৳)
-                    <input type="number" min="0" step="0.01" inputMode="decimal" value={hiddenChargeInput} onChange={(e) => setHiddenChargeInput(e.target.value)} placeholder="0.00" required />
-                  </label>
-                  <button className="primary-btn" type="submit" disabled={saving || !chargeRestaurantId} style={{ minWidth: 155, height: 42 }}>
-                    {saving ? "Saving…" : "Save charge"}
-                  </button>
-                </div>
-
-                {selectedChargeRestaurant ? (
-                  <div style={{ marginTop: 22, padding: 16, border: "1px solid #e6edf2", borderRadius: 13, background: "#f8fbfa", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-                    <div>
-                      <div style={{ fontSize: 10, color: "#8190a3", fontWeight: 800, letterSpacing: 1 }}>SELECTED RESTAURANT</div>
-                      <strong style={{ display: "block", marginTop: 5, color: "#17243b", fontSize: 15 }}>{selectedChargeRestaurant.name || selectedChargeRestaurant.restaurantName || selectedChargeRestaurant.id}</strong>
-                      <span style={{ display: "block", marginTop: 4, color: "#8794a5", fontSize: 10 }}>ID: {selectedChargeRestaurant.id}</span>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 10, color: "#8190a3", fontWeight: 800, letterSpacing: 1 }}>CURRENT SAVED CHARGE</div>
-                      <div style={{ font: "800 25px 'Plus Jakarta Sans'", color: "#139968", marginTop: 3 }}>{money(selectedChargeRestaurant.hiddenDeliveryCharge || 0)}</div>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ marginTop: 18, padding: 16, borderRadius: 11, background: "#fff8eb", color: "#9a6b22", fontSize: 12 }}>No restaurants found in the database.</div>
-                )}
-              </form>
-            </div>
-
-            <div className="panel">
-              <div className="panel-head" style={{ gap: 14, flexWrap: "wrap" }}>
-                <div><h3>Restaurant charge overview</h3><p>Current hidden delivery charge values from Firestore</p></div>
-                <input value={chargeSearch} onChange={(e) => setChargeSearch(e.target.value)} placeholder="Search restaurant…" style={{ height: 36, border: "1px solid #e0e6ee", borderRadius: 8, padding: "0 11px", minWidth: 190, font: "12px 'DM Sans'" }} />
-              </div>
-              <div className="table-wrap">
-                <table>
-                  <thead><tr><th>Restaurant</th><th>Restaurant ID</th><th className="right">Hidden delivery charge</th><th>Status</th><th>Action</th></tr></thead>
-                  <tbody>
-                    {restaurants.filter((r) => normalized(r.name || r.restaurantName || r.id).includes(normalized(chargeSearch))).map((restaurant) => (
-                      <tr key={restaurant.id}>
-                        <td><strong>{restaurant.name || restaurant.restaurantName || restaurant.id}</strong></td>
-                        <td><span className="cell-sub">{restaurant.id}</span></td>
-                        <td className="right">{money(restaurant.hiddenDeliveryCharge || 0)}</td>
-                        <td><span className={`status ${Number(restaurant.hiddenDeliveryCharge || 0) > 0 ? "good" : "pending"}`}>{Number(restaurant.hiddenDeliveryCharge || 0) > 0 ? "Configured" : "No extra charge"}</span></td>
-                        <td><button type="button" className="text-btn" onClick={() => { setChargeRestaurantId(restaurant.id); setHiddenChargeInput(String(Number(restaurant.hiddenDeliveryCharge || 0))); }} style={{ border: 0, background: "#eaf7f1", color: "#13865d", borderRadius: 7, padding: "8px 11px", fontWeight: 800, cursor: "pointer" }}>Edit charge</button></td>
-                      </tr>
-                    ))}
-                    {!restaurants.length && <tr><td colSpan="5" className="empty-cell">No restaurants found.</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </section>
-        )}
-
         <footer className="footer print-hide">Foodish Accounts · Firebase Firestore · Built for internal operations</footer>
       </main>
 
+      {/* FULL ORDER DETAILS MODAL (TRIGGERED BY CLICK & HOLD ON NOTE ROWS) */}
+      {orderDetailModal && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setOrderDetailModal(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.65)",
+            zIndex: 70,
+            display: "grid",
+            placeItems: "center",
+            padding: "16px",
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          <div
+            className="modal-card-animate"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#ffffff",
+              padding: "24px",
+              borderRadius: "18px",
+              width: "100%",
+              maxWidth: "600px",
+              maxHeight: "88vh",
+              overflowY: "auto",
+              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.35)",
+              border: "2px solid #10b981",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                borderBottom: "1px solid #e2e8f0",
+                paddingBottom: "14px",
+                marginBottom: "16px",
+                gap: "12px",
+              }}
+            >
+              <div>
+                <span style={{ fontSize: "11px", fontWeight: "800", color: "#059669", letterSpacing: "0.8px" }}>
+                  FULL ORDER DETAILS
+                </span>
+                <h3 style={{ margin: "4px 0 0", fontSize: "20px", fontWeight: "900", color: "#0f172a" }}>
+                  Order #{orderDetailModal.orderId}
+                </h3>
+                <div style={{ fontSize: "12px", color: "#64748b", marginTop: "3px", fontWeight: "700" }}>
+                  Date: <strong>{orderDetailModal.date}</strong> · Time:{" "}
+                  <strong>{orderDetailModal.createdAtFormatted || formatDateTime(orderDetailModal.createdAt)}</strong>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOrderDetailModal(null)}
+                style={{
+                  border: "1px solid #cbd5e1",
+                  background: "#f8fafc",
+                  color: "#334155",
+                  borderRadius: "8px",
+                  padding: "6px 12px",
+                  fontSize: "13px",
+                  fontWeight: "800",
+                  cursor: "pointer",
+                }}
+              >
+                ✕ Close
+              </button>
+            </div>
+
+            {orderDetailModal.note && (
+              <div
+                style={{
+                  padding: "12px 14px",
+                  background: "#fef2f2",
+                  border: "2px solid #ef4444",
+                  borderRadius: "10px",
+                  color: "#b91c1c",
+                  fontWeight: "900",
+                  fontSize: "14px",
+                  marginBottom: "16px",
+                }}
+              >
+                🚨 ORDER NOTE: {orderDetailModal.note}
+              </div>
+            )}
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                gap: "10px",
+                marginBottom: "16px",
+              }}
+            >
+              <div style={{ background: "#f8fafc", padding: "10px 12px", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
+                <div style={{ fontSize: "10px", fontWeight: "800", color: "#64748b" }}>ORDER STATUS</div>
+                <div style={{ marginTop: "4px" }}>
+                  <span
+                    className={`status ${
+                      orderDetailModal.isDelivered ? "good" : orderDetailModal.isCancelled ? "bad" : "pending"
+                    }`}
+                  >
+                    {orderDetailModal.status}
+                  </span>
+                </div>
+              </div>
+              <div style={{ background: "#f8fafc", padding: "10px 12px", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
+                <div style={{ fontSize: "10px", fontWeight: "800", color: "#64748b" }}>PAYMENT METHOD</div>
+                <div style={{ fontSize: "14px", fontWeight: "800", color: "#0f172a", marginTop: "3px" }}>
+                  {orderDetailModal.payment || "—"}
+                </div>
+              </div>
+              <div style={{ background: "#ecfdf5", padding: "10px 12px", borderRadius: "10px", border: "1px solid #a7f3d0" }}>
+                <div style={{ fontSize: "10px", fontWeight: "800", color: "#065f46" }}>ORDER TOTAL PRICE</div>
+                <div style={{ fontSize: "16px", fontWeight: "900", color: "#047857", marginTop: "2px" }}>
+                  {money(orderDetailModal.amount)}
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: "12px",
+                marginBottom: "16px",
+              }}
+            >
+              <div style={{ background: "#eff6ff", padding: "12px 14px", borderRadius: "12px", border: "1px solid #bfdbfe" }}>
+                <div style={{ fontSize: "11px", fontWeight: "800", color: "#1d4ed8", marginBottom: "4px" }}>
+                  👤 CUSTOMER INFORMATION
+                </div>
+                <div style={{ fontSize: "14px", fontWeight: "800", color: "#0f172a" }}>
+                  {orderDetailModal.userName || "—"}
+                </div>
+                <div style={{ fontSize: "12px", fontWeight: "700", color: "#334155", marginTop: "2px" }}>
+                  Phone: {orderDetailModal.userPhone || "—"}
+                </div>
+                {orderDetailModal.userAddress && (
+                  <div style={{ fontSize: "12px", color: "#475569", marginTop: "3px" }}>
+                    Address: {orderDetailModal.userAddress}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ background: "#f5f3ff", padding: "12px 14px", borderRadius: "12px", border: "1px solid #ddd6fe" }}>
+                <div style={{ fontSize: "11px", fontWeight: "800", color: "#6d28d9", marginBottom: "4px" }}>
+                  🛵 RIDER INFORMATION
+                </div>
+                <div style={{ fontSize: "14px", fontWeight: "800", color: "#0f172a" }}>
+                  {orderDetailModal.riderName || "—"}
+                </div>
+                <div style={{ fontSize: "12px", fontWeight: "700", color: "#334155", marginTop: "2px" }}>
+                  Phone: {orderDetailModal.riderPhone || "—"}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: "16px" }}>
+              <div style={{ fontSize: "12px", fontWeight: "800", color: "#0f172a", marginBottom: "8px" }}>
+                🍽️ MULTI-RESTAURANT PRODUCT & PRICE BREAKDOWN
+              </div>
+              {Array.isArray(orderDetailModal.items) && orderDetailModal.items.length > 0 ? (
+                <OrderItemsBreakdown items={orderDetailModal.items} />
+              ) : (
+                <div style={{ padding: "14px", background: "#f8fafc", borderRadius: "10px", fontSize: "12px", color: "#64748b" }}>
+                  No item details recorded for this order.
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={() => setOrderDetailModal(null)}
+                style={{ background: "#0f172a", height: "40px", padding: "0 22px" }}
+              >
+                Close Details
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODALS */}
       {noteModalEntry && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 50, display: "grid", placeItems: "center", padding: "16px" }}>
-          <div style={{ background: "#fff", padding: "24px", borderRadius: "16px", width: "100%", maxWidth: "400px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }}>
+        <div className="modal-backdrop" style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.55)", zIndex: 50, display: "grid", placeItems: "center", padding: "16px", backdropFilter: "blur(3px)" }}>
+          <div className="modal-card-animate" style={{ background: "#fff", padding: "24px", borderRadius: "16px", width: "100%", maxWidth: "400px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.15)" }}>
             <h3 style={{ margin: "0 0 10px", fontSize: "16px", fontWeight: "800", color: "#0f172a" }}>
               Note for {noteModalEntry.entityName} ({noteModalEntry.date})
             </h3>
@@ -4653,8 +5578,8 @@ function App() {
       )}
 
       {editModalData && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 60, display: "grid", placeItems: "center", padding: "16px", backdropFilter: "blur(2px)" }}>
-          <div style={{ background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "420px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)" }}>
+        <div className="modal-backdrop" style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.55)", zIndex: 60, display: "grid", placeItems: "center", padding: "16px", backdropFilter: "blur(3px)" }}>
+          <div className="modal-card-animate" style={{ background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "420px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)" }}>
             <h3 style={{ margin: "0 0 6px", fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>{editModalData.title}</h3>
             <p style={{ fontSize: "13px", color: "#64748b", margin: "0 0 20px" }}>{editModalData.entityName} · Date: {editModalData.date}</p>
 
@@ -4691,7 +5616,6 @@ function App() {
                     date: editModalData.date,
                   });
 
-                  // Manually physical amount save korleo jeno Check-In list-e Checked hoye jay
                   if (editModalData.entityType === "restaurant" && editModalData.type === "physical") {
                     await handleUpdateManagementEntry({
                       entityType: "restaurant",
@@ -4714,8 +5638,8 @@ function App() {
       )}
 
       {deleteModalData && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 60, display: "grid", placeItems: "center", padding: "16px", backdropFilter: "blur(2px)" }}>
-          <div style={{ background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "400px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)", textAlign: "center" }}>
+        <div className="modal-backdrop" style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.55)", zIndex: 60, display: "grid", placeItems: "center", padding: "16px", backdropFilter: "blur(3px)" }}>
+          <div className="modal-card-animate" style={{ background: "#fff", padding: "28px", borderRadius: "20px", width: "100%", maxWidth: "400px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)", textAlign: "center" }}>
             <div style={{ width: "50px", height: "50px", borderRadius: "50%", background: "#fee2e2", color: "#dc2626", display: "grid", placeItems: "center", fontSize: "24px", margin: "0 auto 15px", fontWeight: "800" }}>!</div>
             <h3 style={{ margin: "0 0 8px", fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>{deleteModalData.title}</h3>
             <p style={{ fontSize: "13px", color: "#64748b", margin: "0 0 24px" }}>{deleteModalData.message}</p>
@@ -4801,93 +5725,285 @@ function EntryTable({ entries, onDelete, showMethod = false }) {
 
 const styles = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
-:root{font-family:'DM Sans',sans-serif;color:#172033;background:#f5f7fb;font-synthesis:none}
-*{box-sizing:border-box}html,body{margin:0;padding:0;width:100%;max-width:100vw;overflow-x:hidden}.app-shell{min-height:100vh;width:100%;max-width:100vw;overflow-x:hidden;display:flex;background:#f5f7fb}.sidebar{width:250px;background:#111b2e;color:#d5deed;min-height:100vh;padding:27px 17px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:5}.brand{display:flex;align-items:center;gap:11px;padding:0 10px 37px}.brand-mark{width:39px;height:39px;border-radius:13px;background:linear-gradient(145deg,#35c98b,#16a875);display:grid;place-items:center;color:white;font-weight:800;font-size:22px}.brand strong{display:block;color:#fff;font:800 18px 'Plus Jakarta Sans'}.brand small{display:block;color:#8190a8;font-size:9px;letter-spacing:1.4px;margin-top:3px}.side-label,.eyebrow{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#8290a8}.side-label{padding:0 12px 12px}.sidebar nav{display:grid;gap:6px}.nav-link{border:0;background:transparent;color:#aab6c9;text-align:left;padding:12px;border-radius:10px;display:flex;align-items:center;gap:12px;font:600 13px 'DM Sans';cursor:pointer}.nav-link:hover{background:#1b2941;color:#fff}.nav-link.active{background:#203b3d;color:#6de0ad}.nav-icon{width:22px;text-align:center;font-size:18px}.sidebar-bottom{margin-top:auto;border-top:1px solid #26334a;padding:18px 10px 0;font-size:11px;color:#aab6c9}.sidebar-bottom small{display:block;color:#74839b;margin:7px 0 0 15px;font-size:10px}.online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#35cf8b;margin-right:7px}.main-area{margin-left:250px;width:calc(100% - 250px);max-width:100%;min-width:0;overflow-x:hidden}.topbar{height:91px;background:#fff;border-bottom:1px solid #e9edf4;display:flex;align-items:center;justify-content:space-between;padding:0 36px;position:sticky;top:0;z-index:4;width:100%}.topbar h1{font:800 21px 'Plus Jakarta Sans';margin:5px 0 0;color:#18243a}.eyebrow{color:#93a0b3;font-size:9px}.topbar-right{display:flex;align-items:center;gap:12px}.refresh-btn{background:#e2e8f0;color:#1e293b;padding:0 14px;height:34px;font-size:11px;border-radius:17px}.refresh-btn:hover{background:#cbd5e1}.today-chip{font-size:11px;color:#64748b;background:#f2f8f5;padding:8px 12px;border-radius:20px}.today-chip span{color:#20b879;margin-right:5px}.avatar{width:34px;height:34px;background:#e6f6ef;color:#149966;border-radius:50%;display:grid;place-items:center;font-weight:800}.content{max-width:1440px;width:100%;margin:0 auto;padding:30px 36px 18px}.section-heading{display:flex;justify-content:space-between;align-items:end;margin:0 0 22px}.section-heading h2{font:800 20px 'Plus Jakarta Sans';margin:0 0 5px}.section-heading p,.panel-head p{font-size:12px;color:#8a96a8;margin:0}.date-label{font-size:11px;color:#7c899d}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:20px}.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.stat-card{background:#fff;border:1px solid #e9edf4;border-radius:14px;padding:18px;min-width:0;box-shadow:0 2px 7px #14213b05}.stat-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:800;font-size:16px;margin-bottom:13px}.stat-icon.green{background:#e7f8f0;color:#17a66d}.stat-icon.red{background:#fff0ef;color:#e25b56}.stat-icon.blue{background:#eaf2ff;color:#4c7de1}.stat-icon.purple{background:#f2edff;color:#8a69d5}.stat-icon.pink{background:#fff0f6;color:#d94e93}.stat-icon.orange{background:#fff3e8;color:#d98835}.stat-label{font-size:11px;color:#8290a3;font-weight:600}.stat-value{font:800 23px 'Plus Jakarta Sans';color:#17243b;margin:5px 0}.stat-hint{font-size:10px;color:#9aa5b5}.panel{background:#fff;border:1px solid #e8edf4;border-radius:14px;margin-bottom:19px;padding:20px;box-shadow:0 2px 7px #14213b05;min-width:0;width:100%}.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px;gap:10px}.panel-head h3{font:700 14px 'Plus Jakarta Sans';margin:0 0 5px}.count-pill{font-size:10px;background:#f1f5f9;color:#66758b;padding:6px 10px;border-radius:20px;white-space:nowrap}.filter-bar{display:flex;align-items:end;gap:14px;flex-wrap:wrap;background:#fff;border:1px solid #e8edf4;border-radius:13px;padding:15px;margin-bottom:17px;width:100%}.filter-bar label,.entry-form label{display:grid;gap:7px;color:#738096;font-size:10px;font-weight:700;min-width:160px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:38px;border:1px solid #e0e6ee;border-radius:8px;background:#fff;padding:0 10px;color:#25324a;font:500 12px 'DM Sans';outline:none;width:100%;min-width:0}.filter-bar select:focus,.filter-bar input:focus,.entry-form input:focus,.entry-form select:focus{border-color:#32b982;box-shadow:0 0 0 3px #32b98218}.table-wrap{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;white-space:nowrap;text-align:left}th{font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:#1e293b;background:#f8fafc;padding:14px 12px;font-weight:900}td{font-size:14px;color:#1e293b;padding:14px 12px;border-bottom:1px solid #f0f2f6;font-weight:700}tbody tr:last-child td{border-bottom:0}td strong{color:#0f172a;font-size:14px;font-weight:800}.right{text-align:right}.cell-sub{display:block;font-size:11px;color:#475569;margin-top:3px;font-weight:600}.status{display:inline-flex;padding:4px 8px;border-radius:20px;font-size:9px;font-weight:700;text-transform:capitalize}.status.good{background:#e8f8f0;color:#159b65}.status.bad{background:#fff0ef;color:#d85853}.status.pending{background:#fff7e8;color:#bb842b}.empty-cell{text-align:center;color:#9aa5b5;padding:28px}.entry-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:2px 0 18px}.entry-form label{flex:1}.entry-form .note-field{flex:2;min-width:190px}.rider-entry-form label{min-width:145px}.primary-btn{height:42px;padding:0 20px;background:#17a873;border:0;border-radius:8px;color:#fff;font:800 13px 'DM Sans';cursor:pointer;white-space:nowrap}.primary-btn:hover{background:#108d60}.primary-btn:disabled{opacity:.6;cursor:wait}.delete-btn{border:0;background:#fff1f0;color:#d35b54;border-radius:6px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer}.tabs{display:flex;gap:6px;border-bottom:1px solid #edf0f5;margin:-2px 0 15px}.tabs button{background:none;border:0;padding:10px 17px;color:#8995a6;font:700 12px 'DM Sans';cursor:pointer;border-bottom:2px solid transparent}.tabs button.selected{color:#159b68;border-color:#20b77a}.compact{border:0;padding:0;margin:0 0 15px}.list-heading{margin-top:20px}.footer{text-align:center;color:#a4adbb;font-size:10px;padding:14px 20px 24px}.loading-line{height:3px;background:#e7f5ee;color:#258d65;font-size:10px;padding-left:36px}.loading-line span{display:block;height:3px;width:35%;background:#22b77b;animation:load 1.5s infinite}@keyframes load{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}.alert{margin:18px 36px 0;padding:12px 14px;border-radius:9px;font-size:11px}.error-alert{background:#fff0ef;color:#b94c47}.toast{position:fixed;right:24px;bottom:24px;z-index:20;background:#14243a;color:white;border-radius:10px;padding:13px 17px;box-shadow:0 12px 35px #14213b30;font-size:12px;display:flex;gap:9px;align-items:center;max-width:min(440px,calc(100vw - 32px));animation:pop .2s ease}.toast.success span{color:#56dfa1}.toast.error span{color:#ff8880}@keyframes pop{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}.saving-overlay{position:fixed;inset:0;background:#0e1a2b70;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;gap:12px;font-size:12px}.loader{width:31px;height:31px;border:3px solid #d9eee5;border-top-color:#18a873;border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.boot-screen{min-height:100vh;display:grid;place-content:center;justify-items:center;gap:12px;background:#f5f7fb;color:#66758b;font:12px 'DM Sans'}.error-panel{max-width:480px;background:#fff;padding:25px;border:1px solid #f1cecb;border-radius:12px;color:#a74440}.error-panel h2{font-size:17px}.error-panel p{font-size:12px;line-height:1.6}
-.login-page{min-height:100vh;position:relative;isolation:isolate;overflow:hidden;display:grid;place-items:center;padding:32px 18px;background:radial-gradient(ellipse at 15% 10%,#e1f8ed 0,transparent 34%),radial-gradient(ellipse at 90% 90%,#e6edff 0,transparent 36%),linear-gradient(135deg,#f8fbff 0%,#f1f6f8 48%,#f8faff 100%);font-family:'DM Sans',sans-serif;color:#17243b}
-.login-glow{position:absolute;z-index:-1;border-radius:50%;filter:blur(2px);pointer-events:none}.login-glow-one{width:330px;height:330px;left:-130px;top:18%;background:#b8f0d7;opacity:.32}.login-glow-two{width:390px;height:390px;right:-150px;bottom:4%;background:#c8d8ff;opacity:.32}
-.login-card{width:min(100%,460px);padding:48px 44px 36px;border:1px solid #e7edf2;border-radius:25px;background:rgba(255,255,255,.92);box-shadow:0 24px 70px rgba(28,48,75,.11),0 3px 10px rgba(28,48,75,.04);text-align:center;backdrop-filter:blur(14px)}
-.login-brand-mark{width:58px;height:58px;margin:0 auto 15px;border-radius:19px;display:grid;place-items:center;background:linear-gradient(145deg,#35c98b,#109b68);box-shadow:0 9px 22px rgba(22,168,117,.25);color:#fff;font:800 30px 'Plus Jakarta Sans'}
-.login-brand-name{font:800 25px 'Plus Jakarta Sans';letter-spacing:-.8px;color:#17243b}.login-brand-name span{color:#18a873}
-.login-kicker{margin-top:7px;color:#95a2b2;font-size:9px;font-weight:800;letter-spacing:1.7px}
-.login-divider{height:1px;background:#edf1f5;margin:28px 0 25px}
-.login-card h1{margin:0;color:#17243b;font:800 27px 'Plus Jakarta Sans';letter-spacing:-.8px}
-.login-description{margin:10px 0 25px;color:#78869a;font-size:13px;line-height:1.8}
-.google-login-button{width:100%;height:52px;display:flex;align-items:center;justify-content:center;gap:13px;border:1px solid #dce3eb;border-radius:11px;background:#fff;color:#26364b;font:700 13px 'DM Sans';cursor:pointer;box-shadow:0 3px 8px rgba(24,40,65,.04);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}
-.google-login-button:hover{transform:translateY(-2px);border-color:#b8c9d7;box-shadow:0 9px 20px rgba(24,40,65,.09)}
+:root{font-family:'DM Sans',sans-serif;color:#172033;background:#f4f7fb;font-synthesis:none}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;width:100%;max-width:100vw;overflow-x:hidden;scroll-behavior:smooth}
+
+/* KEYFRAME ANIMATIONS */
+@keyframes pageFadeSlide {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes cardRise {
+  from { opacity: 0; transform: translateY(16px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes modalBackdropFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modalPop {
+  from { opacity: 0; transform: scale(0.93) translateY(12px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes pulseRing {
+  0% { box-shadow: 0 0 0 0 rgba(32, 184, 121, 0.55); }
+  70% { box-shadow: 0 0 0 7px rgba(32, 184, 121, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(32, 184, 121, 0); }
+}
+@keyframes floatSlow {
+  0%, 100% { transform: translateY(0px) scale(1); }
+  50% { transform: translateY(-18px) scale(1.04); }
+}
+@keyframes load {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+@keyframes pop {
+  from { transform: translateY(14px) scale(0.96); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.page-animate {
+  animation: pageFadeSlide 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.tab-pane-animate {
+  animation: pageFadeSlide 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.modal-backdrop {
+  animation: modalBackdropFade 0.2s ease-out both;
+}
+.modal-card-animate {
+  animation: modalPop 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.app-shell{min-height:100vh;width:100%;max-width:100vw;overflow-x:hidden;display:flex;background:linear-gradient(180deg,#f4f7fb 0%,#eef2f7 100%)}
+
+/* SIDEBAR */
+.sidebar{width:250px;background:linear-gradient(180deg,#0f172a 0%,#152238 100%);color:#d5deed;min-height:100vh;padding:27px 17px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:5;box-shadow:4px 0 24px rgba(15,23,42,0.12)}
+.brand{display:flex;align-items:center;gap:11px;padding:0 10px 34px;transition:transform 0.2s ease}
+.brand:hover{transform:translateX(2px)}
+.brand-mark{width:40px;height:40px;border-radius:13px;background:linear-gradient(145deg,#34d399,#059669);display:grid;place-items:center;color:white;font-weight:800;font-size:22px;box-shadow:0 6px 16px rgba(16,185,129,0.32);transition:transform 0.25s cubic-bezier(0.34,1.56,0.64,1)}
+.brand:hover .brand-mark{transform:rotate(-6deg) scale(1.06)}
+.brand strong{display:block;color:#fff;font:800 18px 'Plus Jakarta Sans';letter-spacing:-0.3px}
+.brand small{display:block;color:#8190a8;font-size:9px;letter-spacing:1.4px;margin-top:3px}
+.side-label,.eyebrow{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#8290a8}
+.side-label{padding:0 12px 12px}
+.sidebar nav{display:grid;gap:5px}
+.nav-link{border:0;background:transparent;color:#9fb0c7;text-align:left;padding:12px 13px;border-radius:11px;display:flex;align-items:center;gap:12px;font:600 13px 'DM Sans';cursor:pointer;transition:all 0.2s cubic-bezier(0.22,1,0.36,1);position:relative}
+.nav-link:hover{background:rgba(255,255,255,0.07);color:#fff;transform:translateX(4px)}
+.nav-link.active{background:linear-gradient(90deg,rgba(16,185,129,0.22) 0%,rgba(16,185,129,0.08) 100%);color:#6ee7b7;box-shadow:inset 3px 0 0 #34d399}
+.nav-icon{width:22px;text-align:center;font-size:17px;transition:transform 0.2s ease}
+.nav-link:hover .nav-icon{transform:scale(1.14)}
+.sidebar-bottom{margin-top:auto;border-top:1px solid rgba(255,255,255,0.08);padding:18px 10px 0;font-size:11px;color:#aab6c9}
+.sidebar-bottom small{display:block;color:#74839b;margin:7px 0 8px 15px;font-size:10px}
+.online-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#34d399;margin-right:7px;animation:pulseRing 2s infinite}
+
+/* MAIN AREA & GLASS TOPBAR */
+.main-area{margin-left:250px;width:calc(100% - 250px);max-width:100%;min-width:0;overflow-x:hidden}
+.topbar{height:84px;background:rgba(255,255,255,0.88);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;padding:0 36px;position:sticky;top:0;z-index:4;width:100%}
+.topbar h1{font:800 21px 'Plus Jakarta Sans';margin:4px 0 0;color:#0f172a;letter-spacing:-0.4px}
+.eyebrow{color:#93a0b3;font-size:9px}
+.topbar-right{display:flex;align-items:center;gap:12px}
+.refresh-btn{background:#f1f5f9;color:#1e293b;padding:0 15px;height:36px;font-size:12px;border-radius:18px;border:1px solid #e2e8f0;transition:all 0.2s ease}
+.refresh-btn:hover{background:#e2e8f0;transform:translateY(-1px)}
+.today-chip{font-size:11px;font-weight:700;color:#065f46;background:#ecfdf5;border:1px solid #a7f3d0;padding:7px 13px;border-radius:20px;display:inline-flex;align-items:center;gap:6px}
+.today-chip span{color:#10b981;display:inline-block;width:7px;height:7px;border-radius:50%;background:#10b981;font-size:0;animation:pulseRing 2s infinite}
+.avatar{width:36px;height:36px;background:linear-gradient(135deg,#d1fae5,#a7f3d0);color:#065f46;border:1.5px solid #6ee7b7;border-radius:50%;display:grid;place-items:center;font-weight:800;box-shadow:0 2px 8px rgba(16,185,129,0.18);transition:transform 0.2s ease}
+.avatar:hover{transform:scale(1.08)}
+
+.content{max-width:1440px;width:100%;margin:0 auto;padding:28px 36px 22px}
+.section-heading{display:flex;justify-content:space-between;align-items:end;margin:0 0 22px}
+.section-heading h2{font:800 21px 'Plus Jakarta Sans';margin:0 0 5px;color:#0f172a;letter-spacing:-0.3px}
+.section-heading p,.panel-head p{font-size:12px;color:#64748b;margin:0}
+.date-label{font-size:11px;font-weight:600;color:#64748b;background:#fff;padding:6px 12px;border-radius:20px;border:1px solid #e2e8f0}
+
+/* STAT CARDS WITH STAGGERED ANIMATION & HOVER GLOW */
+.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:20px}
+.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.stat-card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:19px;min-width:0;box-shadow:0 2px 10px rgba(15,23,42,0.03);transition:transform 0.25s cubic-bezier(0.22,1,0.36,1),box-shadow 0.25s ease,border-color 0.25s ease;animation:cardRise 0.42s cubic-bezier(0.22,1,0.36,1) both}
+.stat-card:nth-child(1){animation-delay:0.03s}
+.stat-card:nth-child(2){animation-delay:0.08s}
+.stat-card:nth-child(3){animation-delay:0.13s}
+.stat-card:nth-child(4){animation-delay:0.18s}
+.stat-card:hover{transform:translateY(-4px);box-shadow:0 14px 28px -8px rgba(15,23,42,0.1);border-color:#cbd5e1}
+.stat-icon{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;font-weight:800;font-size:16px;margin-bottom:13px;transition:transform 0.25s ease}
+.stat-card:hover .stat-icon{transform:scale(1.1) rotate(-4deg)}
+.stat-icon.green{background:#e7f8f0;color:#059669}
+.stat-icon.red{background:#fff0ef;color:#dc2626}
+.stat-icon.blue{background:#eaf2ff;color:#2563eb}
+.stat-icon.purple{background:#f2edff;color:#7c3aed}
+.stat-icon.pink{background:#fff0f6;color:#db2777}
+.stat-icon.orange{background:#fff3e8;color:#ea580c}
+.stat-label{font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.4px}
+.stat-value{font:800 24px 'Plus Jakarta Sans';color:#0f172a;margin:5px 0;letter-spacing:-0.4px}
+.stat-hint{font-size:11px;color:#94a3b8}
+
+/* PANELS & FORMS */
+.panel{background:#fff;border:1px solid #e2e8f0;border-radius:16px;margin-bottom:19px;padding:20px;box-shadow:0 3px 12px rgba(15,23,42,0.03);min-width:0;width:100%;transition:box-shadow 0.25s ease,border-color 0.25s ease}
+.panel:hover{box-shadow:0 8px 24px rgba(15,23,42,0.05)}
+.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px;gap:10px}
+.panel-head h3{font:800 15px 'Plus Jakarta Sans';margin:0 0 4px;color:#0f172a}
+.count-pill{font-size:11px;font-weight:700;background:#f1f5f9;color:#475569;padding:6px 11px;border-radius:20px;white-space:nowrap}
+.filter-bar{display:flex;align-items:end;gap:14px;flex-wrap:wrap;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;margin-bottom:18px;width:100%;box-shadow:0 2px 8px rgba(15,23,42,0.02)}
+.filter-bar label,.entry-form label{display:grid;gap:7px;color:#475569;font-size:11px;font-weight:700;min-width:160px}
+.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:40px;border:1.5px solid #e2e8f0;border-radius:9px;background:#fff;padding:0 11px;color:#0f172a;font:600 12.5px 'DM Sans';outline:none;width:100%;min-width:0;transition:border-color 0.2s ease,box-shadow 0.2s ease}
+.filter-bar select:focus,.filter-bar input:focus,.entry-form input:focus,.entry-form select:focus{border-color:#10b981;box-shadow:0 0 0 3.5px rgba(16,185,129,0.15)}
+
+/* TABLES */
+.table-wrap{width:100%;overflow-x:auto}
+table{width:100%;border-collapse:collapse;white-space:nowrap;text-align:left}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:#334155;background:#f8fafc;padding:13px 12px;font-weight:800;border-bottom:1.5px solid #e2e8f0}
+td{font-size:13.5px;color:#1e293b;padding:13px 12px;border-bottom:1px solid #f1f5f9;font-weight:600;transition:background-color 0.15s ease}
+tbody tr:hover td{background-color:#f8fafc}
+tbody tr:last-child td{border-bottom:0}
+td strong{color:#0f172a;font-size:14px;font-weight:800}
+.right{text-align:right}
+.cell-sub{display:block;font-size:11px;color:#64748b;margin-top:3px;font-weight:600}
+.status{display:inline-flex;align-items:center;padding:4px 10px;border-radius:20px;font-size:10px;font-weight:800;text-transform:capitalize;letter-spacing:0.2px}
+.status.good{background:#dcfce7;color:#15803d}
+.status.bad{background:#fee2e2;color:#b91c1c}
+.status.pending{background:#fef3c7;color:#b45309}
+.empty-cell{text-align:center;color:#94a3b8;padding:30px}
+
+/* BUTTONS WITH MICRO-INTERACTIONS */
+.entry-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:2px 0 18px}
+.entry-form label{flex:1}
+.entry-form .note-field{flex:2;min-width:190px}
+.rider-entry-form label{min-width:145px}
+.primary-btn{height:42px;padding:0 20px;background:linear-gradient(135deg,#10b981 0%,#059669 100%);border:0;border-radius:10px;color:#fff;font:800 13px 'DM Sans';cursor:pointer;white-space:nowrap;box-shadow:0 4px 12px rgba(16,185,129,0.22);transition:transform 0.18s cubic-bezier(0.22,1,0.36,1),box-shadow 0.2s ease,filter 0.2s ease}
+.primary-btn:hover{transform:translateY(-1.5px);box-shadow:0 8px 18px rgba(16,185,129,0.32);filter:brightness(1.04)}
+.primary-btn:active{transform:translateY(0) scale(0.97)}
+.primary-btn:disabled{opacity:.6;cursor:wait;transform:none}
+.delete-btn{border:0;background:#fee2e2;color:#dc2626;border-radius:8px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer;transition:all 0.18s ease}
+.delete-btn:hover{background:#fecaca;transform:translateY(-1px)}
+.delete-btn:active{transform:scale(0.96)}
+
+/* TABS */
+.tabs{display:flex;gap:6px;border-bottom:1px solid #e2e8f0;margin:-2px 0 15px}
+.tabs button{background:none;border:0;padding:11px 18px;color:#64748b;font:700 12.5px 'DM Sans';cursor:pointer;border-bottom:2.5px solid transparent;transition:all 0.2s ease;border-radius:8px 8px 0 0}
+.tabs button:hover{color:#0f172a;background:#f8fafc}
+.tabs button.selected{color:#059669;border-color:#10b981;background:#f0fdf4}
+.compact{border:0;padding:0;margin:0 0 15px}
+.list-heading{margin-top:20px}
+.footer{text-align:center;color:#94a3b8;font-size:11px;padding:16px 20px 26px}
+.loading-line{height:3px;background:#e7f5ee;color:#059669;font-size:10px;padding-left:36px;overflow:hidden}
+.loading-line span{display:block;height:3px;width:35%;background:linear-gradient(90deg,#10b981,#34d399);animation:load 1.4s infinite ease-in-out}
+.alert{margin:18px 36px 0;padding:12px 14px;border-radius:10px;font-size:12px}
+.error-alert{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.toast{position:fixed;right:24px;bottom:24px;z-index:80;background:#0f172a;color:white;border-radius:12px;padding:14px 18px;box-shadow:0 16px 38px rgba(15,23,42,0.28);font-size:12.5px;font-weight:600;display:flex;gap:10px;align-items:center;max-width:min(440px,calc(100vw - 32px));animation:pop 0.26s cubic-bezier(0.16,1,0.3,1)}
+.toast.success span{color:#34d399;font-weight:900}
+.toast.error span{color:#f87171;font-weight:900}
+.saving-overlay{position:fixed;inset:0;background:rgba(15,23,42,0.55);backdrop-filter:blur(3px);z-index:90;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;gap:12px;font-size:13px;font-weight:700;animation:modalBackdropFade 0.18s ease}
+.loader{width:34px;height:34px;border:3.5px solid rgba(255,255,255,0.25);border-top-color:#34d399;border-radius:50%;animation:spin 0.7s linear infinite}
+.boot-screen{min-height:100vh;display:grid;place-content:center;justify-items:center;gap:12px;background:#f4f7fb;color:#64748b;font:13px 'DM Sans'}
+
+/* LOGIN SCREEN */
+.login-page{min-height:100vh;position:relative;isolation:isolate;overflow:hidden;display:grid;place-items:center;padding:32px 18px;background:radial-gradient(ellipse at 15% 10%,#d1fae5 0,transparent 36%),radial-gradient(ellipse at 90% 90%,#dbeafe 0,transparent 38%),linear-gradient(135deg,#f8fbff 0%,#f1f6f8 48%,#f8faff 100%);font-family:'DM Sans',sans-serif;color:#17243b}
+.login-glow{position:absolute;z-index:-1;border-radius:50%;filter:blur(6px);pointer-events:none;animation:floatSlow 7s ease-in-out infinite}
+.login-glow-one{width:340px;height:340px;left:-130px;top:18%;background:#a7f3d0;opacity:.36}
+.login-glow-two{width:400px;height:400px;right:-150px;bottom:4%;background:#bfdbfe;opacity:.36;animation-delay:3.5s}
+.login-card{width:min(100%,460px);padding:48px 44px 36px;border:1px solid #e2e8f0;border-radius:26px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(15,23,42,.12),0 3px 10px rgba(15,23,42,.04);text-align:center;backdrop-filter:blur(14px);animation:modalPop 0.45s cubic-bezier(0.16,1,0.3,1) both}
+.login-brand-mark{width:60px;height:60px;margin:0 auto 15px;border-radius:19px;display:grid;place-items:center;background:linear-gradient(145deg,#34d399,#059669);box-shadow:0 10px 24px rgba(16,185,129,.28);color:#fff;font:800 30px 'Plus Jakarta Sans'}
+.login-brand-name{font:800 25px 'Plus Jakarta Sans';letter-spacing:-.8px;color:#0f172a}.login-brand-name span{color:#10b981}
+.login-kicker{margin-top:7px;color:#94a3b8;font-size:9px;font-weight:800;letter-spacing:1.7px}
+.login-divider{height:1px;background:#e2e8f0;margin:28px 0 25px}
+.login-card h1{margin:0;color:#0f172a;font:800 27px 'Plus Jakarta Sans';letter-spacing:-.8px}
+.login-description{margin:10px 0 25px;color:#64748b;font-size:13px;line-height:1.8}
+.google-login-button{width:100%;height:52px;display:flex;align-items:center;justify-content:center;gap:13px;border:1.5px solid #cbd5e1;border-radius:12px;background:#fff;color:#1e293b;font:700 13.5px 'DM Sans';cursor:pointer;box-shadow:0 3px 8px rgba(15,23,42,.04);transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
+.google-login-button:hover{transform:translateY(-2px);border-color:#94a3b8;box-shadow:0 10px 22px rgba(15,23,42,.09)}
 .google-g{font:800 19px Arial,sans-serif;background:conic-gradient(from -45deg,#4285f4 0 25%,#34a853 25% 50%,#fbbc05 50% 75%,#ea4335 75%);background-clip:text;-webkit-background-clip:text;color:transparent}
-.google-arrow{margin-left:auto;color:#8b98a9;font-size:17px;font-weight:500}
-.login-error{display:grid;gap:5px;text-align:left;margin:0 0 17px;padding:12px 14px;border:1px solid #f3c9c6;border-radius:10px;background:#fff5f4;color:#a63f39;font-size:11px;line-height:1.6;overflow-wrap:anywhere}
+.google-arrow{margin-left:auto;color:#64748b;font-size:17px;font-weight:500}
+.login-error{display:grid;gap:5px;text-align:left;margin:0 0 17px;padding:12px 14px;border:1px solid #fecaca;border-radius:10px;background:#fef2f2;color:#b91c1c;font-size:11px;line-height:1.6;overflow-wrap:anywhere}
 .login-error strong{font-size:12px}
-.login-security{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:22px;color:#96a2b1;font-size:10px}
-.security-dot{width:7px;height:7px;border-radius:50%;background:#20b77a;box-shadow:0 0 0 4px #e5f8ef}
-.login-footer{position:absolute;bottom:18px;left:12px;right:12px;text-align:center;color:#a1adba;font-size:10px}
-.bulk-action-panel { background: #fafbfc; border: 1px solid #e1e7ef; }
+.login-security{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:22px;color:#94a3b8;font-size:10.5px}
+.security-dot{width:7px;height:7px;border-radius:50%;background:#10b981;animation:pulseRing 2s infinite}
+.login-footer{position:absolute;bottom:18px;left:12px;right:12px;text-align:center;color:#94a3b8;font-size:10px}
+
+/* BULK & CHECKBOX CARDS */
+.bulk-action-panel { background: #fafbfc; border: 1px solid #e2e8f0; }
 .bulk-actions-btns { display: flex; gap: 10px; flex-wrap: wrap; }
-.on-btn { background: #17a873; }
-.off-btn { background: #e25b56; }
-.off-btn:hover { background: #c54843; }
+.on-btn { background: linear-gradient(135deg,#10b981 0%,#059669 100%); }
+.off-btn { background: linear-gradient(135deg,#ef4444 0%,#dc2626 100%); box-shadow: 0 4px 12px rgba(239,68,68,0.22); }
+.off-btn:hover { box-shadow: 0 8px 18px rgba(239,68,68,0.32); }
 .selection-controls { display: flex; align-items: center; gap: 12px; margin-bottom: 15px; }
-.text-btn { background: none; border: 0; color: #17a873; font-weight: 700; font-size: 12px; cursor: pointer; padding: 0; }
+.text-btn { background: none; border: 0; color: #059669; font-weight: 800; font-size: 12px; cursor: pointer; padding: 0; }
 .text-btn:hover { text-decoration: underline; }
-.multi-select-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 250px; overflow-y: auto; padding: 4px; border: 1px solid #e9edf4; border-radius: 8px; background: #fff; }
-.restaurant-checkbox-card { display: flex; flex-direction: column; gap: 3px; padding: 10px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer; background: #fdfdfd; transition: all 0.15s ease; }
-.restaurant-checkbox-card:hover { border-color: #cbd5e1; background: #f8fafc; }
-.restaurant-checkbox-card.selected { border-color: #17a873; background: #f0fdf4; box-shadow: 0 0 0 1px #17a873; }
+.multi-select-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; max-height: 250px; overflow-y: auto; padding: 8px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
+.restaurant-checkbox-card { display: flex; flex-direction: column; gap: 4px; padding: 11px; border: 1.5px solid #e2e8f0; border-radius: 10px; cursor: pointer; background: #ffffff; transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease; }
+.restaurant-checkbox-card:hover { border-color: #94a3b8; background: #f8fafc; transform: translateY(-2px); box-shadow: 0 6px 14px rgba(15,23,42,0.05); }
+.restaurant-checkbox-card.selected { border-color: #10b981; background: #f0fdf4; box-shadow: 0 0 0 1px #10b981; }
 .restaurant-checkbox-card span { font-weight: 800; font-size: 14px; color: #0f172a; }
+
+/* HOLDABLE NOTE ROW */
+.holdable-note-row { cursor: pointer; user-select: none; transition: background-color 0.15s ease, transform 0.12s ease; }
+.holdable-note-row:hover { background-color: #fef2f2 !important; }
+.holdable-note-row:active { background-color: #fee2e2 !important; transform: scale(0.996); }
+
+/* UNIVERSAL ORDER CARDS */
 .universal-card-list table, .universal-card-list thead, .universal-card-list tbody, .universal-card-list th, .universal-card-list td, .universal-card-list tr {
-display: block;
-width: 100%;
+  display: block;
+  width: 100%;
 }
 .universal-card-list thead tr {
-position: absolute;
-top: -9999px;
-left: -9999px;
+  position: absolute;
+  top: -9999px;
+  left: -9999px;
 }
 .universal-card-list tr {
-background: #ffffff;
-border: 2px solid var(--card-border-color, #3b82f6);
-border-radius: 14px;
-margin-bottom: 16px;
-padding: 16px;
-box-shadow: 0 4px 14px rgba(0,0,0,0.05);
+  background: #ffffff;
+  border: 2px solid var(--card-border-color, #3b82f6);
+  border-radius: 15px;
+  margin-bottom: 16px;
+  padding: 16px;
+  box-shadow: 0 4px 14px rgba(15,23,42,0.04);
+  transition: transform 0.22s cubic-bezier(0.22,1,0.36,1), box-shadow 0.22s ease;
+  animation: cardRise 0.35s cubic-bezier(0.22,1,0.36,1) both;
+}
+.universal-card-list tr:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 24px -6px rgba(15,23,42,0.1);
 }
 .universal-card-list td {
-border: none;
-position: relative;
-padding: 8px 0;
-text-align: left;
-font-size: 14px;
-display: flex;
-flex-direction: column;
-align-items: flex-start;
-border-bottom: 1px solid #f1f5f9;
-overflow-wrap: anywhere;
-word-break: break-word;
+  border: none;
+  position: relative;
+  padding: 8px 0;
+  text-align: left;
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  border-bottom: 1px solid #f1f5f9;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .universal-card-list td:last-child {
-border-bottom: none;
+  border-bottom: none;
 }
 .universal-card-list td::before {
-content: attr(data-label);
-font-weight: 800;
-text-transform: uppercase;
-color: #64748b;
-font-size: 11px;
-margin-bottom: 3px;
-letter-spacing: 0.5px;
+  content: attr(data-label);
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #64748b;
+  font-size: 11px;
+  margin-bottom: 3px;
+  letter-spacing: 0.5px;
 }
 .universal-card-list td.right {
-text-align: left;
+  text-align: left;
 }
 .card-value-block {
-width: 100%;
-overflow-wrap: anywhere;
-word-break: break-word;
+  width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .orders-card-grid {
-display: grid;
-grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-gap: 15px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 15px;
 }
 
 /* Check-In Mobile-First Full-Width View Styles */
@@ -4933,12 +6049,16 @@ gap: 15px;
   width: 100%;
   background: #ffffff;
   border: 1.5px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 12px 14px;
+  border-radius: 13px;
+  padding: 13px 15px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: all 0.15s ease;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
+}
+.checkin-item-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 18px rgba(15,23,42,0.06);
 }
 .checkin-item-card.is-checked {
   background: #f0fdf4;
@@ -4994,8 +6114,8 @@ gap: 15px;
 }
 .checkin-toggle-btn {
   flex-shrink: 0;
-  border-radius: 8px;
-  padding: 7px 11px;
+  border-radius: 9px;
+  padding: 7px 12px;
   font-size: 11px;
   font-weight: 800;
   cursor: pointer;
@@ -5003,6 +6123,10 @@ gap: 15px;
   align-items: center;
   gap: 4px;
   white-space: nowrap;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+.checkin-toggle-btn:active {
+  transform: scale(0.95);
 }
 .checkin-toggle-btn.checked {
   border: 2px solid #16a34a;
@@ -5059,67 +6183,71 @@ gap: 15px;
 }
 
 @media print {
-@page {
-size: A4 portrait;
-margin: 5mm;
-}
-body {
--webkit-print-color-adjust: exact;
-print-color-adjust: exact;
-}
-.print-hide, .sidebar, .topbar, .footer {
-display: none !important;
-}
-.app-shell, .main-area {
-margin: 0 !important;
-width: 100% !important;
-background: #fff !important;
-}
-.content {
-padding: 0 !important;
-max-width: 100% !important;
-}
-.panel {
-border: none !important;
-box-shadow: none !important;
-padding: 0 !important;
-margin-bottom: 10px !important;
-background: transparent !important;
-}
-.printable-report-area, .history-print-box {
-width: 100% !important;
-max-width: 100% !important;
-padding: 5px !important;
-margin: 0 !important;
-border: none !important;
-position: relative !important;
-background: #fff !important;
-}
-.pdf-watermark-logo {
-display: block !important;
-}
-table {
-width: 100% !important;
-table-layout: auto !important;
-border-collapse: collapse !important;
-overflow: visible !important;
-font-size: 10px !important;
-}
-table th, table td {
-font-size: 10px !important;
-padding: 4px 6px !important;
-white-space: nowrap !important;
-}
-.printable-report-area table td:nth-child(4) {
-white-space: normal !important;
-}
-tr {
-page-break-inside: avoid !important;
-}
+  @page {
+    size: A4 portrait;
+    margin: 5mm;
+  }
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .print-hide, .sidebar, .topbar, .footer {
+    display: none !important;
+  }
+  .app-shell, .main-area {
+    margin: 0 !important;
+    width: 100% !important;
+    background: #fff !important;
+  }
+  .content {
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+  .panel {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin-bottom: 10px !important;
+    background: transparent !important;
+  }
+  .printable-report-area, .history-print-box {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 5px !important;
+    margin: 0 !important;
+    border: none !important;
+    position: relative !important;
+    background: #fff !important;
+  }
+  .pdf-watermark-logo {
+    display: block !important;
+  }
+  table {
+    width: 100% !important;
+    table-layout: auto !important;
+    border-collapse: collapse !important;
+    overflow: visible !important;
+    font-size: 10px !important;
+  }
+  table th, table td {
+    font-size: 10px !important;
+    padding: 4px 6px !important;
+    white-space: nowrap !important;
+  }
+  .printable-report-area table td:nth-child(4) {
+    white-space: normal !important;
+  }
+  tr {
+    page-break-inside: avoid !important;
+  }
 }
 @media(max-width:520px){.login-page{padding:22px 14px 58px}.login-card{padding:37px 24px 29px;border-radius:20px}.login-card h1{font-size:24px}.login-brand-name{font-size:23px}.login-description{font-size:12px}}
 @media(max-width:1000px){.sidebar{width:210px}.main-area{margin-left:210px;width:calc(100% - 210px)}.content{padding:24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:680px){.sidebar{width:270px;max-width:82vw;padding:22px 17px;transform:translateX(-105%);transition:transform .32s cubic-bezier(.2,.8,.2,1);box-shadow:18px 0 50px #101b2e24}.sidebar.sidebar-open{transform:translateX(0)}.brand{padding:0 8px 30px}.brand>div:last-child,.side-label,.nav-link span:last-child,.sidebar-bottom{display:block}.nav-link{justify-content:flex-start;padding:14px 12px;min-height:46px}.main-area{margin-left:0;width:100%}.topbar{height:72px;padding:0 14px 0 58px;position:sticky}.mobile-menu-btn{display:grid;place-items:center;position:absolute;left:13px;top:18px;width:34px;height:34px;border:1px solid #e7edf2;border-radius:9px;background:#fff;color:#26364b;font-size:18px;cursor:pointer}.sidebar-scrim{display:block;position:fixed;inset:0;background:#0d1728a6;border:0;z-index:4;backdrop-filter:blur(2px)}.topbar h1{font-size:18px}.content{padding:16px 12px 30px}.section-heading{align-items:start;gap:10px;flex-direction:column}.section-heading h2{font-size:19px}.stats-grid,.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.stat-card{padding:14px;min-height:120px;border-radius:14px}.stat-icon{width:34px;height:34px}.stat-value{font-size:clamp(17px,4.8vw,22px)}.stat-label{font-size:11px}.stat-hint{font-size:10px;line-height:1.4}.panel{padding:14px;border-radius:14px}.filter-bar{padding:12px;gap:10px}.filter-bar label{flex:1 1 100%;min-width:0;font-size:11px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:42px;font-size:14px}.entry-form{display:grid;grid-template-columns:1fr;gap:13px}.entry-form label,.entry-form .note-field{min-width:0}.entry-form label{font-size:11px}.entry-form .primary-btn{width:100%;height:46px;font-size:13px}.primary-btn,.delete-btn{min-height:40px}.table-wrap{border-radius:9px}th{font-size:10px;padding:13px 12px}td{font-size:12px;padding:14px 12px}.date-label{font-size:11px}.alert{margin:12px 13px 0}.today-chip{font-size:10px;padding:8px}.avatar{width:34px;height:34px}.footer{padding-bottom:30px}}
+@media(max-width:680px){.sidebar{width:270px;max-width:82vw;padding:22px 17px;transform:translateX(-105%);transition:transform .32s cubic-bezier(.2,.8,.2,1);box-shadow:18px 0 50px #101b2e24}.sidebar.sidebar-open{transform:translateX(0)}.brand{padding:0 8px 30px}.brand>div:last-child,.side-label,.nav-link span:last-child,.sidebar-bottom{display:block}.nav-link{justify-content:flex-start;padding:14px 12px;min-height:46px}.main-area{margin-left:0;width:100%}.topbar{height:72px;padding:0 14px 0 58px;position:sticky}.mobile-menu-btn{display:grid;place-items:center;position:absolute;left:13px;top:18px;width:34px;height:34px;border:1px solid #e7edf2;border-radius:9px;background:#fff;color:#26364b;font-size:18px;cursor:pointer}.sidebar-scrim{display:block;position:fixed;inset:0;background:#0d1728a6;border:0;z-index:4;backdrop-filter:blur(2px);animation:modalBackdropFade 0.2s ease}.topbar h1{font-size:18px}.content{padding:16px 12px 30px}.section-heading{align-items:start;gap:10px;flex-direction:column}.section-heading h2{font-size:19px}.stats-grid,.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.stat-card{padding:14px;min-height:120px;border-radius:14px}.stat-icon{width:34px;height:34px}.stat-value{font-size:clamp(17px,4.8vw,22px)}.stat-label{font-size:11px}.stat-hint{font-size:10px;line-height:1.4}.panel{padding:14px;border-radius:14px}.filter-bar{padding:12px;gap:10px}.filter-bar label{flex:1 1 100%;min-width:0;font-size:11px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:42px;font-size:14px}.entry-form{display:grid;grid-template-columns:1fr;gap:13px}.entry-form label,.entry-form .note-field{min-width:0}.entry-form label{font-size:11px}.entry-form .primary-btn{width:100%;height:46px;font-size:13px}.primary-btn,.delete-btn{min-height:40px}.table-wrap{border-radius:9px}th{font-size:10px;padding:13px 12px}td{font-size:12px;padding:14px 12px}.date-label{font-size:11px}.alert{margin:12px 13px 0}.today-chip{font-size:10px;padding:8px}.avatar{width:34px;height:34px}.footer{padding-bottom:30px}}
 @media(min-width:681px){.mobile-menu-btn,.sidebar-scrim{display:none}}
 @media(max-width:380px){.stats-grid,.stats-grid.two{grid-template-columns:1fr}.stat-card{min-height:unset}.topbar-right{gap:8px}.today-chip{display:none}}
 `;
