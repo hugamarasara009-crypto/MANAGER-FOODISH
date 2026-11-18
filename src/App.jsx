@@ -344,14 +344,28 @@ function App() {
 
   // UNIVERSAL NATIVE + WEB PRINT / SAVE PDF HELPER
   async function handlePrintReport(title = "Foodish Statement") {
+    const previousTitle = document.title;
+    const cleanTitle = String(title)
+      .replace(/[\\/:*?"<>|]/g, "_")
+      .trim();
+
+    document.title = cleanTitle;
+
     if (Capacitor.getPlatform() !== "web") {
       try {
-        await Printer.printWebView({ name: title });
+        await Printer.printWebView({ name: cleanTitle });
       } catch (error) {
         setNotice({ type: "error", text: `Print/PDF failed: ${error.message}` });
+      } finally {
+        setTimeout(() => {
+          document.title = previousTitle;
+        }, 1000);
       }
     } else {
       window.print();
+      setTimeout(() => {
+        document.title = previousTitle;
+      }, 1000);
     }
   }
 
@@ -3047,7 +3061,11 @@ function App() {
                     <button
                       type="button"
                       className="primary-btn"
-                      onClick={() => handlePrintReport(`Restaurant_Statement_${selectedRestaurant?.name || "Report"}`)}
+                      onClick={() =>
+                        handlePrintReport(
+                          `${selectedRestaurant?.name || "Restaurant"}_${resSummaryStart}_to_${resSummaryEnd}`
+                        )
+                      }
                       style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}
                     >
                       🖨️ Print / Download PDF
@@ -3320,7 +3338,11 @@ function App() {
                               type="button"
                               className="primary-btn"
                               style={{ height: "34px", padding: "0 14px", fontSize: "12px", background: "#3b82f6" }}
-                              onClick={() => handlePrintReport(`Restaurant_Statement_${displayData.restaurantName}`)}
+                              onClick={() =>
+                                handlePrintReport(
+                                  `${displayData.restaurantName}_${displayData.fromDate}_to_${displayData.toDate}`
+                                )
+                              }
                             >
                               🖨️ Print / PDF
                             </button>
@@ -4265,7 +4287,11 @@ function App() {
                     <button
                       type="button"
                       className="primary-btn"
-                      onClick={() => handlePrintReport(`Rider_Statement_${selectedRider?.name || "Report"}`)}
+                      onClick={() =>
+                        handlePrintReport(
+                          `${selectedRider?.name || "Rider"}_${riderSummaryStart}_to_${riderSummaryEnd}`
+                        )
+                      }
                       style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}
                     >
                       🖨️ Print / Download PDF
@@ -4414,7 +4440,11 @@ function App() {
                               type="button"
                               className="primary-btn"
                               style={{ height: "34px", padding: "0 14px", fontSize: "12px", background: "#3b82f6" }}
-                              onClick={() => handlePrintReport(`Rider_Statement_${displayData.riderName}`)}
+                              onClick={() =>
+                                handlePrintReport(
+                                  `${displayData.riderName}_${displayData.fromDate}_to_${displayData.toDate}`
+                                )
+                              }
                             >
                               🖨️ Print / PDF
                             </button>
@@ -4910,7 +4940,15 @@ function App() {
                 <button className="primary-btn" onClick={() => saveEntityReportArchive(historyType)} style={{ height: "38px", padding: "0 16px" }}>
                   💾 Save Permanent Report
                 </button>
-                <button className="primary-btn" onClick={() => handlePrintReport(`History_Report_${historyStart}_to_${historyEnd}`)} style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}>
+                <button
+                  className="primary-btn"
+                  onClick={() =>
+                    handlePrintReport(
+                      `${historyType === "restaurant" ? selectedRestaurant?.name || "Restaurant" : historyType === "rider" ? selectedRider?.name || "Rider" : "Online"}_${historyStart}_to_${historyEnd}`
+                    )
+                  }
+                  style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}
+                >
                   🖨️ PDF Print
                 </button>
               </div>
@@ -5027,7 +5065,17 @@ function App() {
                 </div>
 
                 <div style={{ marginTop: "25px", display: "flex", justifyContent: "flex-end", gap: "10px", position: "relative", zIndex: 1 }} className="print-hide">
-                  <button className="primary-btn" onClick={() => handlePrintReport("Restaurant_History_Report")} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+                  <button
+                    className="primary-btn"
+                    onClick={() =>
+                      handlePrintReport(
+                        `${activeReportPrintData ? activeReportPrintData.entityName : selectedRestaurant?.name || "Restaurant"}_${activeReportPrintData ? activeReportPrintData.startDate : historyStart}_to_${activeReportPrintData ? activeReportPrintData.endDate : historyEnd}`
+                      )
+                    }
+                    style={{ background: "#3b82f6" }}
+                  >
+                    🖨️ Print / Download PDF
+                  </button>
                   {activeReportPrintData && (
                     <button className="primary-btn" onClick={() => setActiveReportPrintData(null)} style={{ background: "#64748b" }}>Close Archive View</button>
                   )}
@@ -5119,7 +5167,17 @@ function App() {
                 </div>
 
                 <div style={{ marginTop: "25px", display: "flex", justifyContent: "flex-end", gap: "10px", position: "relative", zIndex: 1 }} className="print-hide">
-                  <button className="primary-btn" onClick={() => handlePrintReport("Rider_History_Report")} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+                  <button
+                    className="primary-btn"
+                    onClick={() =>
+                      handlePrintReport(
+                        `${activeReportPrintData ? activeReportPrintData.entityName : selectedRider?.name || "Rider"}_${activeReportPrintData ? activeReportPrintData.startDate : historyStart}_to_${activeReportPrintData ? activeReportPrintData.endDate : historyEnd}`
+                      )
+                    }
+                    style={{ background: "#3b82f6" }}
+                  >
+                    🖨️ Print / Download PDF
+                  </button>
                   {activeReportPrintData && (
                     <button className="primary-btn" onClick={() => setActiveReportPrintData(null)} style={{ background: "#64748b" }}>Close Archive View</button>
                   )}
