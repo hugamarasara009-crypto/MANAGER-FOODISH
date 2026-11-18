@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Foodish Accounts</string>
+    <string name="title_activity_main">Foodish Accounts</string>
+    <string name="package_name">com.foodish.accounts</string>
+    <string name="custom_url_scheme">com.foodish.accounts</string>
+    <string name="default_web_client_id">1096387078386-j39cmg6m1k70u42ff20hf5t2j30valeg.apps.googleusercontent.com</string>
+    <string name="server_client_id">1096387078386-j39cmg6m1k70u42ff20hf5t2j30valeg.apps.googleusercontent.com</string>
+</resources>
