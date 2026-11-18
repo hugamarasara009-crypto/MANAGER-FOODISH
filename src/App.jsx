@@ -344,7 +344,6 @@ function App() {
 
   // UNIVERSAL NATIVE + WEB PRINT / SAVE PDF HELPER
   async function handlePrintReport(title = "Foodish Statement") {
-    const previousTitle = document.title;
     const cleanTitle = String(title)
       .replace(/[\\/:*?"<>|]/g, "_")
       .trim();
@@ -356,16 +355,11 @@ function App() {
         await Printer.printWebView({ name: cleanTitle });
       } catch (error) {
         setNotice({ type: "error", text: `Print/PDF failed: ${error.message}` });
-      } finally {
-        setTimeout(() => {
-          document.title = previousTitle;
-        }, 1000);
       }
     } else {
-      window.print();
       setTimeout(() => {
-        document.title = previousTitle;
-      }, 1000);
+        window.print();
+      }, 150);
     }
   }
 
@@ -403,6 +397,11 @@ function App() {
 
   useEffect(() => {
     document.title = "Foodish Accounts Dashboard";
+    const handleAfterPrint = () => {
+      document.title = "Foodish Accounts Dashboard";
+    };
+    window.addEventListener("afterprint", handleAfterPrint);
+    return () => window.removeEventListener("afterprint", handleAfterPrint);
   }, []);
 
   useEffect(() => {
