@@ -75,6 +75,16 @@ const formatDateTime = (value) => {
     : "—";
 };
 
+const formatTimeOnly = (value) => {
+  const date = asDate(value);
+  return date
+    ? date.toLocaleTimeString("en-BD", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+};
+
 const normalized = (value) => String(value || "").trim().toLowerCase();
 
 const isDelivered = (order) =>
@@ -269,6 +279,26 @@ function App() {
   const [overviewSearch, setOverviewSearch] = useState("");
   const [overviewStatus, setOverviewStatus] = useState("all");
 
+  // Cross Check Page States
+  const [crossCheckDate, setCrossCheckDate] = useState(todayKey());
+  const [crossCheckStatusFilter, setCrossCheckStatusFilter] = useState("all");
+  const [crossCheckedMap, setCrossCheckedMap] = useState(() => {
+    try {
+      const saved = localStorage.getItem("foodish_cross_checked_orders");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("foodish_cross_checked_orders", JSON.stringify(crossCheckedMap));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [crossCheckedMap]);
+
   // Restaurant Page States (Daily + Summary)
   const [restaurantTab, setRestaurantTab] = useState("daily");
   const [resPageDate, setResPageDate] = useState(todayKey());
@@ -276,7 +306,6 @@ function App() {
   const [resPageSearch, setResPageSearch] = useState("");
   const [resSummaryStart, setResSummaryStart] = useState(todayKey());
   const [resSummaryEnd, setResSummaryEnd] = useState(todayKey());
-  // Selection mode for Restaurant Summary: "sell" (Total Sell) OR "physical" (Physical Amount)
   const [resSummaryBaseType, setResSummaryBaseType] = useState("sell");
   const [resAdjAmountInput, setResAdjAmountInput] = useState("");
   const [resAdjNoteInput, setResAdjNoteInput] = useState("");
@@ -304,7 +333,7 @@ function App() {
   const [riderAdjustments, setRiderAdjustments] = useState([]);
   const [activeSavedRiderStatement, setActiveSavedRiderStatement] = useState(null);
 
-  // Full Order Details Modal on Note Long-Press
+  // Full Order Details Modal on Note Long-Press (900ms proper long hold)
   const [orderDetailModal, setOrderDetailModal] = useState(null);
   const longPressTimerRef = useRef(null);
 
@@ -334,7 +363,6 @@ function App() {
   const [activeReportPrintData, setActiveReportPrintData] = useState(null);
   const [activePaperworkPrintReport, setActivePaperworkPrintReport] = useState(null);
 
-  // Launch running animation timer (runs smoothly while Firebase auth & data sync in background)
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowLaunchSplash(false);
@@ -597,12 +625,14 @@ function App() {
     if (!riderId && riders.length) setRiderId(riders[0].id);
   }, [riders, riderId]);
 
+  // PROPER LONG HOLD (900ms) FOR ORDER DETAILS POPUP
   const startNoteLongPress = (orderObj) => {
     if (!orderObj) return;
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     longPressTimerRef.current = setTimeout(() => {
       setOrderDetailModal(orderObj);
-    }, 450);
+      longPressTimerRef.current = null;
+    }, 900);
   };
 
   const cancelNoteLongPress = () => {
@@ -610,6 +640,111 @@ function App() {
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
     }
+  };
+
+  // CROSS CHECK PAGE COMPUTED DATA
+  const crossCheckData = useMemo(() => {
+    if (!selectedRestaurant || !crossCheckDate) {
+      return {
+        ordersList: [],
+        notesList: [],
+        totalAmount: 0,
+        checkedAmount: 0,
+        uncheckedAmount: 0,
+        checkedCount: 0,
+      };
+    }
+
+    const resKeyPrefix = `${selectedRestaurant.id}_${crossCheckDate}_`;
+
+    const matchingOrders = orders
+      .filter((order) => {
+        if (dateKey(order.createdAt) !== crossCheckDate) return false;
+        const sub = itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id);
+        if (sub <= 0) return false;
+
+        if (crossCheckStatusFilter === "non_cancelled" && isCancelled(order)) return false;
+        if (crossCheckStatusFilter === "delivered" && !isDelivered(order)) return false;
+        return true;
+      })
+      .map((order) => {
+        const sub = itemSubtotal(order.items, selectedRestaurant.name, selectedRestaurant.id);
+        const matchedRider = riders.find((r) => String(r.id) === String(order.riderId));
+        const rawOrderNote = order.note || order.orderNote || order.instructions || "";
+        const checkStorageKey = `${resKeyPrefix}${order.id}`;
+
+        return {
+          id: order.id,
+          checkStorageKey,
+          date: crossCheckDate,
+          createdAt: order.createdAt,
+          createdAtFormatted: formatDateTime(order.createdAt),
+          timeFormatted: formatTimeOnly(order.createdAt),
+          orderId: order.orderId || order.id.slice(0, 8),
+          status: order.orderStatus || "Pending",
+          isDelivered: isDelivered(order),
+          isCancelled: isCancelled(order),
+          restaurantSubtotal: sub,
+          amount: orderAmount(order),
+          payment: order.payment || order.paymentMethod || "—",
+          userName: order.userName || "—",
+          userPhone: order.userPhone || "—",
+          userAddress: order.address || order.userAddress || order.deliveryAddress || "",
+          riderName: matchedRider ? matchedRider.name || matchedRider.id : order.riderName || "—",
+          riderPhone: matchedRider ? matchedRider.phone || "—" : order.riderPhone || "—",
+          items: Array.isArray(order.items) ? JSON.parse(JSON.stringify(order.items)) : [],
+          note: String(rawOrderNote).trim(),
+        };
+      })
+      .sort((a, b) => (asDate(a.createdAt)?.getTime() || 0) - (asDate(b.createdAt)?.getTime() || 0));
+
+    const notesList = matchingOrders.filter((o) => o.note !== "");
+
+    let totalAmount = 0;
+    let checkedAmount = 0;
+    let checkedCount = 0;
+
+    matchingOrders.forEach((o) => {
+      totalAmount += o.restaurantSubtotal;
+      if (crossCheckedMap[o.checkStorageKey]) {
+        checkedAmount += o.restaurantSubtotal;
+        checkedCount += 1;
+      }
+    });
+
+    return {
+      ordersList: matchingOrders,
+      notesList,
+      totalAmount,
+      checkedAmount,
+      uncheckedAmount: totalAmount - checkedAmount,
+      checkedCount,
+    };
+  }, [orders, riders, selectedRestaurant, crossCheckDate, crossCheckStatusFilter, crossCheckedMap]);
+
+  const toggleCrossCheckBox = (checkStorageKey) => {
+    setCrossCheckedMap((prev) => {
+      const next = { ...prev };
+      if (next[checkStorageKey]) {
+        delete next[checkStorageKey];
+      } else {
+        next[checkStorageKey] = true;
+      }
+      return next;
+    });
+  };
+
+  const resetCrossCheckForSelection = () => {
+    if (!selectedRestaurant) return;
+    const prefix = `${selectedRestaurant.id}_${crossCheckDate}_`;
+    setCrossCheckedMap((prev) => {
+      const next = { ...prev };
+      Object.keys(next).forEach((k) => {
+        if (k.startsWith(prefix)) delete next[k];
+      });
+      return next;
+    });
+    setNotice({ type: "success", text: "All cross-check boxes cleared for this restaurant & date." });
   };
 
   async function handleBulkRestaurantAction(turnOn) {
@@ -1026,7 +1161,6 @@ function App() {
     return { deliveredTotal: deliveredSum, pendingTotal: pendingSum, cancelledTotal: cancelledSum };
   }, [orders, selectedRestaurant, resPageDate]);
 
-  // Restaurant Range Summary: calculates BOTH Total Sell (deliveredSubtotal) AND Physical Cash Amount
   const restaurantRangeSummary = useMemo(() => {
     if (!selectedRestaurant || !resSummaryStart || !resSummaryEnd) {
       return {
@@ -1079,7 +1213,6 @@ function App() {
       }
     });
 
-    // Sum physical cash collection entries for this restaurant across the selected date range
     let physicalTotal = 0;
     managementEntries.forEach((entry) => {
       const k = dateKey(entry.date || entry.createdAt);
@@ -2055,6 +2188,7 @@ function App() {
     ["overview", "Overview", "◫"],
     ["checkin", "Check In", "✓"],
     ["restaurants", "Restaurants", "▤"],
+    ["crosscheck", "Cross Check", "☑"],
     ["online-payment", "Online Payment", "💳"],
     ["riders", "Riders", "♧"],
     ["history", "History & Reports", "▦"],
@@ -2552,6 +2686,239 @@ function App() {
                   )}
                 </div>
               </div>
+            </div>
+          </section>
+        )}
+
+        {/* CROSS CHECK PAGE */}
+        {page === "crosscheck" && (
+          <section key="page-crosscheck" className="content page-animate">
+            <div className="section-heading">
+              <div>
+                <h2>☑ Restaurant Order Cross Check</h2>
+                <p>
+                  রেস্টুরেন্টের খাতার সাথে অ্যাপের অর্ডার অ্যামাউন্ট মিলিয়ে নিন। বক্সে ক্লিক করলে বক্সটি সবুজ (Green) হয়ে যাবে এবং নিচে নোট চেপে ধরলে অর্ডার ডিটেইলস আসবে।
+                </p>
+              </div>
+            </div>
+
+            <div className="filter-bar">
+              <label style={{ flex: 1.5 }}>
+                Restaurant সিলেক্ট করুন
+                <select value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)}>
+                  {restaurants.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name || r.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                তারিখ (Date)
+                <input
+                  type="date"
+                  value={crossCheckDate}
+                  onChange={(e) => setCrossCheckDate(e.target.value)}
+                />
+              </label>
+              <label>
+                অর্ডার ফিল্টার
+                <select
+                  value={crossCheckStatusFilter}
+                  onChange={(e) => setCrossCheckStatusFilter(e.target.value)}
+                >
+                  <option value="all">All Orders (সব অর্ডার)</option>
+                  <option value="non_cancelled">Without Cancelled (ক্যানসেল বাদে)</option>
+                  <option value="delivered">Delivered Only (শুধু ডেলিভারড)</option>
+                </select>
+              </label>
+              {crossCheckData.checkedCount > 0 && (
+                <div style={{ display: "flex", alignItems: "flex-end" }}>
+                  <button
+                    type="button"
+                    className="delete-btn"
+                    style={{ height: "40px", padding: "0 14px" }}
+                    onClick={resetCrossCheckForSelection}
+                  >
+                    ↺ Reset Green ({crossCheckData.checkedCount})
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="stats-grid" style={{ marginBottom: "20px" }}>
+              <StatCard
+                label="মোট অর্ডার ও অ্যামাউন্ট"
+                value={money(crossCheckData.totalAmount)}
+                hint={`${crossCheckData.ordersList.length}টি অর্ডার · ${crossCheckDate}`}
+                icon="▤"
+                tone="blue"
+              />
+              <StatCard
+                label="মিলানো হয়েছে (Green)"
+                value={money(crossCheckData.checkedAmount)}
+                hint={`${crossCheckData.checkedCount} / ${crossCheckData.ordersList.length} বক্স চেকড`}
+                icon="✓"
+                tone="green"
+              />
+              <StatCard
+                label="বাকি আছে (Unchecked)"
+                value={money(crossCheckData.uncheckedAmount)}
+                hint={`${crossCheckData.ordersList.length - crossCheckData.checkedCount}টি বক্স বাকি`}
+                icon="⌛"
+                tone="orange"
+              />
+              <StatCard
+                label="অর্ডার নোট সংখ্যা"
+                value={crossCheckData.notesList.length}
+                hint="নিচে নোট লিস্ট দেখুন"
+                icon="🚨"
+                tone="red"
+              />
+            </div>
+
+            {/* SMALL BOX GRID OF ALL ORDER AMOUNTS */}
+            <div className="panel">
+              <div className="panel-head" style={{ flexWrap: "wrap", gap: "8px" }}>
+                <div>
+                  <h3>
+                    📦 {selectedRestaurant?.name || "Restaurant"} — অর্ডার অ্যামাউন্ট বক্স ({crossCheckDate})
+                  </h3>
+                  <p>যেকোনো অ্যামাউন্ট বক্সে ক্লিক করলে সেটি সবুজ (Green) হবে। আবার ক্লিক করলে আগের অবস্থায় ফিরবে।</p>
+                </div>
+                <span className="count-pill">
+                  Checked: {crossCheckData.checkedCount} / {crossCheckData.ordersList.length}
+                </span>
+              </div>
+
+              {crossCheckData.ordersList.length > 0 ? (
+                <div className="cross-check-box-grid">
+                  {crossCheckData.ordersList.map((ord, index) => {
+                    const isGreen = Boolean(crossCheckedMap[ord.checkStorageKey]);
+                    return (
+                      <button
+                        key={ord.id}
+                        type="button"
+                        onClick={() => toggleCrossCheckBox(ord.checkStorageKey)}
+                        className={`cross-amount-box ${isGreen ? "is-green" : ""} ${
+                          ord.isCancelled ? "is-cancelled" : ""
+                        }`}
+                        title={`Order #${ord.orderId} · ${ord.status} · Click to toggle green`}
+                      >
+                        <div className="cross-box-top">
+                          <span className="cross-box-sl">#{index + 1}</span>
+                          <span className="cross-box-check">{isGreen ? "✓" : ""}</span>
+                        </div>
+                        <div className="cross-box-amount">{money(ord.restaurantSubtotal)}</div>
+                        <div className="cross-box-meta">
+                          <span>#{ord.orderId}</span>
+                          {ord.timeFormatted && <span>{ord.timeFormatted}</span>}
+                        </div>
+                        {ord.isCancelled && <span className="cross-box-cancel-tag">Cancelled</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty-cell">
+                  {selectedRestaurant?.name || "এই রেস্টুরেন্টে"} {crossCheckDate} তারিখে কোনো অর্ডার পাওয়া যায়নি।
+                </div>
+              )}
+            </div>
+
+            {/* NOTES LIST BELOW WITH LONG HOLD FOR FULL ORDER DETAILS */}
+            <div
+              className="panel"
+              style={{
+                background: "#ffffff",
+                border: "1px solid #cbd5e1",
+                borderRadius: "14px",
+                padding: "18px",
+              }}
+            >
+              <div className="panel-head" style={{ marginBottom: "12px", flexWrap: "wrap", gap: "8px" }}>
+                <div>
+                  <h3>🚨 Date-Wise Order Notes ({crossCheckDate})</h3>
+                  <p>
+                    {selectedRestaurant?.name || "Restaurant"}-এর নোটসমূহ ·{" "}
+                    <strong style={{ color: "#2563eb" }}>
+                      (নোটের উপর চেপে ধরে রাখলে / Long Hold করলে ফুল অর্ডার ডিটেইলস আসবে)
+                    </strong>
+                  </p>
+                </div>
+                <span className="count-pill">{crossCheckData.notesList.length} notes</span>
+              </div>
+
+              {crossCheckData.notesList.length > 0 ? (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Order ID</th>
+                        <th>Time</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Order Note (Long Hold for Full Details)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {crossCheckData.notesList.map((item, idx) => (
+                        <tr
+                          key={item.id}
+                          className="holdable-note-row"
+                          title="Long hold (press & hold) to view full order details"
+                          onMouseDown={() => startNoteLongPress(item)}
+                          onMouseUp={cancelNoteLongPress}
+                          onMouseLeave={cancelNoteLongPress}
+                          onTouchStart={() => startNoteLongPress(item)}
+                          onTouchMove={cancelNoteLongPress}
+                          onTouchEnd={cancelNoteLongPress}
+                          onTouchCancel={cancelNoteLongPress}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setOrderDetailModal(item);
+                          }}
+                        >
+                          <td><strong>{idx + 1}</strong></td>
+                          <td><strong>#{item.orderId}</strong></td>
+                          <td>{item.timeFormatted || item.date}</td>
+                          <td><strong style={{ color: "#047857" }}>{money(item.restaurantSubtotal)}</strong></td>
+                          <td>
+                            <span
+                              className={`status ${
+                                item.isDelivered ? "good" : item.isCancelled ? "bad" : "pending"
+                              }`}
+                            >
+                              {item.status}
+                            </span>
+                          </td>
+                          <td style={{ whiteSpace: "normal", color: "#b91c1c", fontWeight: "800" }}>
+                            {item.note}{" "}
+                            <span
+                              style={{
+                                fontSize: "10px",
+                                background: "#eff6ff",
+                                color: "#1d4ed8",
+                                padding: "2px 7px",
+                                borderRadius: "6px",
+                                marginLeft: "6px",
+                                fontWeight: "700",
+                              }}
+                            >
+                              Long Hold to View Order
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{ textAlign: "center", color: "#9aa5b5", padding: "20px", fontSize: "13px" }}>
+                  {crossCheckDate} তারিখে এই রেস্টুরেন্টের কোনো অর্ডারে নোট নেই।
+                </div>
+              )}
             </div>
           </section>
         )}
@@ -3072,7 +3439,6 @@ function App() {
                   </div>
                 </div>
 
-                {/* 2-OPTION SELECTION BUTTONS: TOTAL SELL vs PHYSICAL AMOUNT */}
                 {!activeSavedResStatement && (
                   <div
                     className="panel print-hide"
@@ -3655,7 +4021,7 @@ function App() {
                             <p>
                               All orders with notes for {displayData.restaurantName} ·{" "}
                               <strong style={{ color: "#2563eb" }}>
-                                (Click kore dhore rakhle full order details dekhabe)
+                                (Long Hold kore dhore rakhle full order details dekhabe)
                               </strong>
                             </p>
                           </div>
@@ -3671,7 +4037,7 @@ function App() {
                                   <th>Date</th>
                                   <th>Order ID</th>
                                   <th>Order Status</th>
-                                  <th>Order Note (Hold for Full Details)</th>
+                                  <th>Order Note (Long Hold for Full Details)</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -3679,11 +4045,12 @@ function App() {
                                   <tr
                                     key={item.id || idx}
                                     className="holdable-note-row"
-                                    title="Click and hold to view full order details"
+                                    title="Long hold (press & hold) to view full order details"
                                     onMouseDown={() => startNoteLongPress(item)}
                                     onMouseUp={cancelNoteLongPress}
                                     onMouseLeave={cancelNoteLongPress}
                                     onTouchStart={() => startNoteLongPress(item)}
+                                    onTouchMove={cancelNoteLongPress}
                                     onTouchEnd={cancelNoteLongPress}
                                     onTouchCancel={cancelNoteLongPress}
                                     onContextMenu={(e) => {
@@ -3717,7 +4084,7 @@ function App() {
                                           fontWeight: "700",
                                         }}
                                       >
-                                        Hold to View Order
+                                        Long Hold to View Order
                                       </span>
                                     </td>
                                   </tr>
@@ -4757,7 +5124,7 @@ function App() {
                             <p>
                               All orders with notes assigned to {displayData.riderName} ·{" "}
                               <strong style={{ color: "#2563eb" }}>
-                                (Click kore dhore rakhle full order details dekhabe)
+                                (Long Hold kore dhore rakhle full order details dekhabe)
                               </strong>
                             </p>
                           </div>
@@ -4773,7 +5140,7 @@ function App() {
                                   <th>Date</th>
                                   <th>Order ID</th>
                                   <th>Order Status</th>
-                                  <th>Order Note (Hold for Full Details)</th>
+                                  <th>Order Note (Long Hold for Full Details)</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -4781,11 +5148,12 @@ function App() {
                                   <tr
                                     key={item.id || idx}
                                     className="holdable-note-row"
-                                    title="Click and hold to view full order details"
+                                    title="Long hold (press & hold) to view full order details"
                                     onMouseDown={() => startNoteLongPress(item)}
                                     onMouseUp={cancelNoteLongPress}
                                     onMouseLeave={cancelNoteLongPress}
                                     onTouchStart={() => startNoteLongPress(item)}
+                                    onTouchMove={cancelNoteLongPress}
                                     onTouchEnd={cancelNoteLongPress}
                                     onTouchCancel={cancelNoteLongPress}
                                     onContextMenu={(e) => {
@@ -4819,7 +5187,7 @@ function App() {
                                           fontWeight: "700",
                                         }}
                                       >
-                                        Hold to View Order
+                                        Long Hold to View Order
                                       </span>
                                     </td>
                                   </tr>
@@ -6245,6 +6613,113 @@ html,body{margin:0;padding:0;width:100%;max-width:100vw;overflow-x:hidden;scroll
 .filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:40px;border:1.5px solid #e2e8f0;border-radius:9px;background:#fff;padding:0 11px;color:#0f172a;font:600 12.5px 'DM Sans';outline:none;width:100%;min-width:0;transition:border-color 0.2s ease,box-shadow 0.2s ease}
 .filter-bar select:focus,.filter-bar input:focus,.entry-form input:focus,.entry-form select:focus{border-color:#10b981;box-shadow:0 0 0 3.5px rgba(16,185,129,0.15)}
 
+/* CROSS CHECK AMOUNT BOX GRID */
+.cross-check-box-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(122px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+.cross-amount-box {
+  appearance: none;
+  border: 2px solid #cbd5e1;
+  background: #f8fafc;
+  border-radius: 12px;
+  padding: 10px 11px;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+  transition: transform 0.15s ease, background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  position: relative;
+  user-select: none;
+}
+.cross-amount-box:hover {
+  transform: translateY(-2px);
+  border-color: #94a3b8;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.06);
+}
+.cross-amount-box:active {
+  transform: scale(0.96);
+}
+.cross-amount-box.is-green {
+  background: linear-gradient(145deg, #22c55e 0%, #16a34a 100%);
+  border-color: #15803d;
+  color: #ffffff;
+  box-shadow: 0 6px 16px rgba(22, 163, 74, 0.28);
+}
+.cross-amount-box.is-cancelled:not(.is-green) {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+.cross-box-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  font-size: 10px;
+  font-weight: 800;
+  color: #64748b;
+}
+.cross-amount-box.is-green .cross-box-top {
+  color: #dcfce7;
+}
+.cross-box-check {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid #cbd5e1;
+  display: inline-grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 900;
+  background: #ffffff;
+  color: #16a34a;
+}
+.cross-amount-box.is-green .cross-box-check {
+  border-color: #ffffff;
+  background: #ffffff;
+  color: #15803d;
+}
+.cross-box-amount {
+  font: 900 17px 'Plus Jakarta Sans', sans-serif;
+  color: #0f172a;
+  letter-spacing: -0.3px;
+  margin: 2px 0;
+}
+.cross-amount-box.is-green .cross-box-amount {
+  color: #ffffff;
+}
+.cross-box-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+  gap: 4px;
+}
+.cross-amount-box.is-green .cross-box-meta {
+  color: #ecfdf5;
+}
+.cross-box-cancel-tag {
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #dc2626;
+  background: #fee2e2;
+  padding: 1px 5px;
+  border-radius: 4px;
+  align-self: flex-start;
+}
+.cross-amount-box.is-green .cross-box-cancel-tag {
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+
 /* TABLES */
 .table-wrap{width:100%;overflow-x:auto}
 table{width:100%;border-collapse:collapse;white-space:nowrap;text-align:left}
@@ -6331,7 +6806,7 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
 .restaurant-checkbox-card span { font-weight: 800; font-size: 14px; color: #0f172a; }
 
 /* HOLDABLE NOTE ROW */
-.holdable-note-row { cursor: pointer; user-select: none; transition: background-color 0.15s ease, transform 0.12s ease; }
+.holdable-note-row { cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; transition: background-color 0.15s ease, transform 0.12s ease; }
 .holdable-note-row:hover { background-color: #fef2f2 !important; }
 .holdable-note-row:active { background-color: #fee2e2 !important; transform: scale(0.996); }
 
@@ -6571,6 +7046,16 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   }
   .checkin-item-card {
     padding: 11px 12px;
+  }
+  .cross-check-box-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .cross-amount-box {
+    padding: 8px 9px;
+  }
+  .cross-box-amount {
+    font-size: 15px;
   }
 }
 
