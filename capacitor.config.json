@@ -1,0 +1,11 @@
+{
+  "appId": "com.foodish.accounts",
+  "appName": "Foodish Accounts",
+  "webDir": "dist",
+  "plugins": {
+    "FirebaseAuthentication": {
+      "skipNativeAuth": true,
+      "providers": ["google.com"]
+    }
+  }
+}

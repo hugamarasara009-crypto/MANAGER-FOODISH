@@ -1,8 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { auth, db } from "./firebase";
+import { Capacitor } from "@capacitor/core";
+import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
+import { Filesystem, Directory, Encoding } from "@capacitor/filesystem";
+import { Share } from "@capacitor/share";
+import { Printer } from "@capgo/capacitor-printer";
 import {
   onAuthStateChanged,
   GoogleAuthProvider,
+  signInWithCredential,
   signInWithPopup,
   signOut,
 } from "firebase/auth";
@@ -109,7 +115,6 @@ const getOrderRestaurants = (items = []) => {
   return uniqueNames.length > 0 ? uniqueNames.join(", ") : "—";
 };
 
-// Group order items by restaurant for multi-restaurant breakdowns
 const groupItemsByRestaurant = (items = []) => {
   if (!Array.isArray(items)) return [];
   const groups = {};
@@ -132,7 +137,6 @@ const groupItemsByRestaurant = (items = []) => {
   return Object.values(groups);
 };
 
-// Render full order items categorized by restaurants
 const OrderItemsBreakdown = ({ items = [], highlightRestaurantName = "", highlightRestaurantId = "" }) => {
   const groups = groupItemsByRestaurant(items);
   if (groups.length === 0) return <span>—</span>;
@@ -243,6 +247,10 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState(null);
+
+  // App Launch Running Animation Splash State (Background data syncs immediately)
+  const [showLaunchSplash, setShowLaunchSplash] = useState(true);
+
   const [orders, setOrders] = useState([]);
   const [restaurants, setRestaurants] = useState([]);
   const [riders, setRiders] = useState([]);
@@ -262,12 +270,14 @@ function App() {
   const [overviewStatus, setOverviewStatus] = useState("all");
 
   // Restaurant Page States (Daily + Summary)
-  const [restaurantTab, setRestaurantTab] = useState("daily"); // "daily" | "summary"
+  const [restaurantTab, setRestaurantTab] = useState("daily");
   const [resPageDate, setResPageDate] = useState(todayKey());
   const [resPageStatus, setResPageStatus] = useState("all");
   const [resPageSearch, setResPageSearch] = useState("");
   const [resSummaryStart, setResSummaryStart] = useState(todayKey());
   const [resSummaryEnd, setResSummaryEnd] = useState(todayKey());
+  // Selection mode for Restaurant Summary: "sell" (Total Sell) OR "physical" (Physical Amount)
+  const [resSummaryBaseType, setResSummaryBaseType] = useState("sell");
   const [resAdjAmountInput, setResAdjAmountInput] = useState("");
   const [resAdjNoteInput, setResAdjNoteInput] = useState("");
   const [resFineAmountInput, setResFineAmountInput] = useState("");
@@ -279,7 +289,7 @@ function App() {
   const [noteInputVal, setNoteInputVal] = useState("");
 
   // Rider Page States
-  const [riderTab, setRiderTab] = useState("daily"); // "daily" | "summary"
+  const [riderTab, setRiderTab] = useState("daily");
   const [riderPageDate, setRiderPageDate] = useState(todayKey());
   const [riderPageStatus, setRiderPageStatus] = useState("all");
   const [riderPageSearch, setRiderPageSearch] = useState("");
@@ -323,6 +333,59 @@ function App() {
   });
   const [activeReportPrintData, setActiveReportPrintData] = useState(null);
   const [activePaperworkPrintReport, setActivePaperworkPrintReport] = useState(null);
+
+  // Launch running animation timer (runs smoothly while Firebase auth & data sync in background)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowLaunchSplash(false);
+    }, 1850);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // UNIVERSAL NATIVE + WEB PRINT / SAVE PDF HELPER
+  async function handlePrintReport(title = "Foodish Statement") {
+    if (Capacitor.getPlatform() !== "web") {
+      try {
+        await Printer.printWebView({ name: title });
+      } catch (error) {
+        setNotice({ type: "error", text: `Print/PDF failed: ${error.message}` });
+      }
+    } else {
+      window.print();
+    }
+  }
+
+  // UNIVERSAL NATIVE + WEB CSV DOWNLOAD / SHARE HELPER
+  async function downloadCsvFile(filename, rawCsvString) {
+    const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+    if (Capacitor.getPlatform() !== "web") {
+      try {
+        const savedFile = await Filesystem.writeFile({
+          path: safeFilename,
+          data: rawCsvString,
+          directory: Directory.Cache,
+          encoding: Encoding.UTF8,
+        });
+        await Share.share({
+          title: safeFilename,
+          url: savedFile.uri,
+          dialogTitle: "Save or Share CSV Report",
+        });
+      } catch (error) {
+        setNotice({ type: "error", text: `CSV download failed: ${error.message}` });
+      }
+    } else {
+      const blob = new Blob([rawCsvString], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", safeFilename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+  }
 
   useEffect(() => {
     document.title = "Foodish Accounts Dashboard";
@@ -393,6 +456,7 @@ function App() {
     }
   }, [paperWorkRiderIds]);
 
+  // Background Auth & Firestore Sync starts immediately on mount
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setAuthError("");
@@ -430,11 +494,30 @@ function App() {
   async function handleGoogleLogin() {
     setAuthError("");
     try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: "select_account" });
-      await signInWithPopup(auth, provider);
+      if (Capacitor.getPlatform() !== "web") {
+        const result = await FirebaseAuthentication.signInWithGoogle();
+        const idToken = result.credential?.idToken;
+        if (!idToken) throw new Error("Google ID token paoya jayni.");
+        const credential = GoogleAuthProvider.credential(idToken);
+        await signInWithCredential(auth, credential);
+      } else {
+        const provider = new GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: "select_account" });
+        await signInWithPopup(auth, provider);
+      }
     } catch (error) {
       setAuthError(`Google sign-in failed: ${error.message}`);
+    }
+  }
+
+  async function handleSignOut() {
+    try {
+      if (Capacitor.getPlatform() !== "web") {
+        await FirebaseAuthentication.signOut();
+      }
+      await signOut(auth);
+    } catch (error) {
+      setAuthError(`Sign-out failed: ${error.message}`);
     }
   }
 
@@ -821,8 +904,7 @@ function App() {
   };
 
   const downloadSavedReportCSV = (report) => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += `Paper Work Report - Date: ${report.date}\n\n`;
+    let csvContent = `Paper Work Report - Date: ${report.date}\n\n`;
     csvContent += "Name,Delivered,Online,Bill,Charge,Salary,Fine\n";
     report.rows.forEach((r) => {
       csvContent += `"${r.name}",${r.delivered},${r.online},${r.bill},${r.charge},${r.salary},${r.fine}\n`;
@@ -831,13 +913,7 @@ function App() {
     csvContent += `\nAll Total,,${report.totals.online},${report.totals.bill},${report.totals.charge},${report.totals.salary},${report.totals.fine}\n`;
     csvContent += `\nProfit Summary (Formula: Bill*9.41% + Charge),,${report.profit}\n`;
 
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `paper_work_report_${report.date}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsvFile(`paper_work_report_${report.date}.csv`, csvContent);
   };
 
   const overviewOrdersOnDate = useMemo(
@@ -937,10 +1013,12 @@ function App() {
     return { deliveredTotal: deliveredSum, pendingTotal: pendingSum, cancelledTotal: cancelledSum };
   }, [orders, selectedRestaurant, resPageDate]);
 
+  // Restaurant Range Summary: calculates BOTH Total Sell (deliveredSubtotal) AND Physical Cash Amount
   const restaurantRangeSummary = useMemo(() => {
     if (!selectedRestaurant || !resSummaryStart || !resSummaryEnd) {
       return {
         deliveredSubtotal: 0,
+        physicalTotal: 0,
         deliveredCount: 0,
         orderNotesList: [],
       };
@@ -988,6 +1066,22 @@ function App() {
       }
     });
 
+    // Sum physical cash collection entries for this restaurant across the selected date range
+    let physicalTotal = 0;
+    managementEntries.forEach((entry) => {
+      const k = dateKey(entry.date || entry.createdAt);
+      if (
+        k &&
+        k >= resSummaryStart &&
+        k <= resSummaryEnd &&
+        entry.entityType === "restaurant" &&
+        String(entry.entityId) === String(selectedRestaurant.id) &&
+        ["collection", "physical"].includes(normalized(entry.type))
+      ) {
+        physicalTotal += Number(entry.amount || 0);
+      }
+    });
+
     orderNotesList.sort(
       (a, b) =>
         a.date.localeCompare(b.date) ||
@@ -996,10 +1090,11 @@ function App() {
 
     return {
       deliveredSubtotal,
+      physicalTotal,
       deliveredCount,
       orderNotesList,
     };
-  }, [orders, riders, selectedRestaurant, resSummaryStart, resSummaryEnd]);
+  }, [orders, riders, managementEntries, selectedRestaurant, resSummaryStart, resSummaryEnd]);
 
   const handleAddRestaurantAdjustment = (type) => {
     const isFine = type === "fine";
@@ -1039,7 +1134,11 @@ function App() {
   };
 
   const resSummaryCalculation = useMemo(() => {
-    const baseTotal = Number(restaurantRangeSummary.deliveredSubtotal || 0);
+    const baseTotal =
+      resSummaryBaseType === "physical"
+        ? Number(restaurantRangeSummary.physicalTotal || 0)
+        : Number(restaurantRangeSummary.deliveredSubtotal || 0);
+
     let plusSum = 0;
     let minusSum = 0;
     let fineSum = 0;
@@ -1052,13 +1151,18 @@ function App() {
 
     const netTotal = baseTotal + plusSum - minusSum - fineSum;
     return { baseTotal, plusSum, minusSum, fineSum, netTotal };
-  }, [restaurantRangeSummary, resAdjustments]);
+  }, [restaurantRangeSummary, resAdjustments, resSummaryBaseType]);
 
   async function saveRestaurantStatementToDatabase() {
     if (!selectedRestaurant) {
       setNotice({ type: "error", text: "Restaurant select korun." });
       return;
     }
+    const baseLabel =
+      resSummaryBaseType === "physical"
+        ? "Physical Cash Amount"
+        : "Total Sell (Delivered Items)";
+
     setSaving(true);
     try {
       const statementPayload = {
@@ -1068,6 +1172,8 @@ function App() {
         toDate: resSummaryEnd,
         savedAt: new Date().toISOString(),
         deliveredCount: restaurantRangeSummary.deliveredCount,
+        baseType: resSummaryBaseType,
+        baseLabel,
         baseTotal: resSummaryCalculation.baseTotal,
         plusSum: resSummaryCalculation.plusSum,
         minusSum: resSummaryCalculation.minusSum,
@@ -1110,11 +1216,13 @@ function App() {
   };
 
   const downloadRestaurantStatementCSV = (st) => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += `FOODISH RESTAURANT STATEMENT\n`;
+    const labelText =
+      st.baseLabel ||
+      (st.baseType === "physical" ? "Physical Cash Amount" : "Total Sell (Delivered Items)");
+    let csvContent = `FOODISH RESTAURANT STATEMENT\n`;
     csvContent += `Restaurant Name:,"${st.restaurantName}"\n`;
     csvContent += `Period:,${st.fromDate} to ${st.toDate}\n`;
-    csvContent += `Total Delivered Amount:,${st.baseTotal}\n\n`;
+    csvContent += `${labelText}:,${st.baseTotal}\n\n`;
     csvContent += `SL,Type,Amount,Note\n`;
     (st.adjustments || []).forEach((adj, idx) => {
       const sign = adj.type === "plus" ? "+ Plus" : adj.type === "minus" ? "- Minus" : "Fine (-)";
@@ -1127,13 +1235,7 @@ function App() {
       csvContent += `${idx + 1},${n.date},"#${n.orderId}","${n.status}","${(n.note || "").replace(/"/g, '""')}"\n`;
     });
 
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `restaurant_statement_${st.restaurantName}_${st.fromDate}_to_${st.toDate}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsvFile(`restaurant_statement_${st.restaurantName}_${st.fromDate}_to_${st.toDate}.csv`, csvContent);
   };
 
   const riderPageOrders = useMemo(() => {
@@ -1401,8 +1503,7 @@ function App() {
   };
 
   const downloadRiderStatementCSV = (st) => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += `FOODISH RIDER STATEMENT\n`;
+    let csvContent = `FOODISH RIDER STATEMENT\n`;
     csvContent += `Rider Name:,"${st.riderName}"\n`;
     csvContent += `Period:,${st.fromDate} to ${st.toDate}\n`;
     csvContent += `Total COD Cash Amount:,${st.baseTotal}\n\n`;
@@ -1418,13 +1519,7 @@ function App() {
       csvContent += `${idx + 1},${n.date},"#${n.orderId}","${n.status}","${(n.note || "").replace(/"/g, '""')}"\n`;
     });
 
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `rider_statement_${st.riderName}_${st.fromDate}_to_${st.toDate}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsvFile(`rider_statement_${st.riderName}_${st.fromDate}_to_${st.toDate}.csv`, csvContent);
   };
 
   const onlinePaymentOrders = useMemo(() => {
@@ -1954,12 +2049,28 @@ function App() {
     ["paperwork", "Paper Work", "📄"],
   ];
 
-  if (!authReady) {
+  // App Open Running Animation Splash Screen (while Auth & Firestore Sync run in background)
+  if (showLaunchSplash || !authReady) {
     return (
-      <div className="boot-screen">
-        <div className="loader" />
-        <p>Connecting to Firebase…</p>
-      </div>
+      <>
+        <style>{styles}</style>
+        <div className="boot-screen running-splash">
+          <div className="splash-glow-circle" />
+          <div className="splash-logo-wrap">
+            <FoodishLogo size={68} />
+          </div>
+          <div className="splash-brand-title">
+            Foodish <span>Accounts</span>
+          </div>
+          <div className="splash-runner-track">
+            <div className="splash-runner-scooter">🛵💨</div>
+            <div className="splash-runner-bar" />
+          </div>
+          <p className="splash-sync-text">
+            <span className="sync-pulse-dot" /> Syncing live data in background…
+          </p>
+        </div>
+      </>
     );
   }
 
@@ -2071,7 +2182,7 @@ function App() {
         <div className="sidebar-bottom">
           <span className="online-dot" /> Firebase connected
           <small>{user?.email}</small>
-          <button className="nav-link" onClick={() => signOut(auth)}>Sign out</button>
+          <button className="nav-link" onClick={handleSignOut}>Sign out</button>
         </div>
       </aside>
 
@@ -2239,7 +2350,7 @@ function App() {
           </section>
         )}
 
-        {/* CHECK-IN PAGE (Mobile-First Responsive View) */}
+        {/* CHECK-IN PAGE */}
         {page === "checkin" && (
           <section key="page-checkin" className="content checkin-mobile-page page-animate">
             <div className="section-heading">
@@ -2441,7 +2552,7 @@ function App() {
                 <p>View bKash, Nagad, and Rocket payment records with customer details, payment amounts, and PDF download option.</p>
               </div>
               <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+                <button className="primary-btn" onClick={() => handlePrintReport(`Online_Payments_${onlinePayDate}`)} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
               </div>
             </div>
 
@@ -2563,13 +2674,13 @@ function App() {
               </div>
 
               <div style={{ marginTop: "30px", display: "flex", justifyContent: "flex-end", position: "relative", zIndex: 1 }} className="print-hide">
-                <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+                <button className="primary-btn" onClick={() => handlePrintReport(`Online_Payments_${onlinePayDate}`)} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
               </div>
             </div>
           </section>
         )}
 
-        {/* 3. RESTAURANTS PAGE (DAILY ACCOUNTS + DATE-RANGE SUMMARY WITH PLUS/MINUS, FINE & PERMANENT SAVE) */}
+        {/* 3. RESTAURANTS PAGE */}
         {page === "restaurants" && (
           <section key="page-restaurants" className="content page-animate">
             <div className="section-heading print-hide" style={{ marginBottom: "14px" }}>
@@ -2579,7 +2690,6 @@ function App() {
               </div>
             </div>
 
-            {/* RESTAURANT PAGE TOP TABS: Daily Accounts vs Summary */}
             <div
               className="tabs print-hide"
               style={{
@@ -2937,13 +3047,124 @@ function App() {
                     <button
                       type="button"
                       className="primary-btn"
-                      onClick={() => window.print()}
+                      onClick={() => handlePrintReport(`Restaurant_Statement_${selectedRestaurant?.name || "Report"}`)}
                       style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}
                     >
                       🖨️ Print / Download PDF
                     </button>
                   </div>
                 </div>
+
+                {/* 2-OPTION SELECTION BUTTONS: TOTAL SELL vs PHYSICAL AMOUNT */}
+                {!activeSavedResStatement && (
+                  <div
+                    className="panel print-hide"
+                    style={{
+                      padding: "16px",
+                      marginBottom: "18px",
+                      background: "#f8fafc",
+                      border: "1.5px solid #cbd5e1",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        fontWeight: "800",
+                        color: "#334155",
+                        marginBottom: "10px",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.5px",
+                      }}
+                    >
+                      🎯 হিসাবের ভিত্তি সিলেক্ট করুন (Choose Calculation Base):
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                        gap: "12px",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setResSummaryBaseType("sell")}
+                        style={{
+                          padding: "14px 16px",
+                          borderRadius: "12px",
+                          border: resSummaryBaseType === "sell" ? "2.5px solid #059669" : "1.5px solid #cbd5e1",
+                          background: resSummaryBaseType === "sell" ? "#ecfdf5" : "#ffffff",
+                          color: resSummaryBaseType === "sell" ? "#065f46" : "#475569",
+                          fontWeight: "800",
+                          fontSize: "14px",
+                          cursor: "pointer",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-start",
+                          gap: "4px",
+                          boxShadow: resSummaryBaseType === "sell" ? "0 4px 12px rgba(16,185,129,0.18)" : "none",
+                          transition: "all 0.2s ease",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
+                          <span>💰 Total Sell (Delivered)</span>
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              padding: "2px 8px",
+                              borderRadius: "12px",
+                              background: resSummaryBaseType === "sell" ? "#10b981" : "#e2e8f0",
+                              color: resSummaryBaseType === "sell" ? "#ffffff" : "#475569",
+                            }}
+                          >
+                            {resSummaryBaseType === "sell" ? "✓ Selected" : "Select"}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: "20px", fontWeight: "900", color: resSummaryBaseType === "sell" ? "#047857" : "#0f172a" }}>
+                          {money(restaurantRangeSummary.deliveredSubtotal)}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setResSummaryBaseType("physical")}
+                        style={{
+                          padding: "14px 16px",
+                          borderRadius: "12px",
+                          border: resSummaryBaseType === "physical" ? "2.5px solid #2563eb" : "1.5px solid #cbd5e1",
+                          background: resSummaryBaseType === "physical" ? "#eff6ff" : "#ffffff",
+                          color: resSummaryBaseType === "physical" ? "#1e40af" : "#475569",
+                          fontWeight: "800",
+                          fontSize: "14px",
+                          cursor: "pointer",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-start",
+                          gap: "4px",
+                          boxShadow: resSummaryBaseType === "physical" ? "0 4px 12px rgba(37,99,235,0.18)" : "none",
+                          transition: "all 0.2s ease",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
+                          <span>💵 Physical Cash Amount</span>
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              padding: "2px 8px",
+                              borderRadius: "12px",
+                              background: resSummaryBaseType === "physical" ? "#2563eb" : "#e2e8f0",
+                              color: resSummaryBaseType === "physical" ? "#ffffff" : "#475569",
+                            }}
+                          >
+                            {resSummaryBaseType === "physical" ? "✓ Selected" : "Select"}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: "20px", fontWeight: "900", color: resSummaryBaseType === "physical" ? "#1d4ed8" : "#0f172a" }}>
+                          {money(restaurantRangeSummary.physicalTotal)}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {firestoreRestaurantStatements.length > 0 && (
                   <div className="panel print-hide">
@@ -2961,7 +3182,7 @@ function App() {
                           <tr>
                             <th>Restaurant Name</th>
                             <th>From Date → To Date</th>
-                            <th>Total Delivered Subtotal</th>
+                            <th>Calculation Base</th>
                             <th>Net Final Total</th>
                             <th>Saved At</th>
                             <th className="right">Actions</th>
@@ -2974,7 +3195,10 @@ function App() {
                               <tr key={st.id}>
                                 <td><strong>{st.restaurantName}</strong></td>
                                 <td>{st.fromDate} to {st.toDate}</td>
-                                <td><strong>{money(st.baseTotal)}</strong></td>
+                                <td>
+                                  <div><strong>{money(st.baseTotal)}</strong></div>
+                                  <small className="cell-sub">{st.baseLabel || "Total Delivered Amount"}</small>
+                                </td>
                                 <td>
                                   <strong style={{ color: "#047857", fontSize: "15px" }}>
                                     {money(st.netTotal)}
@@ -3017,6 +3241,15 @@ function App() {
 
                 {(() => {
                   const isLockedView = Boolean(activeSavedResStatement);
+                  const activeBaseLabel = isLockedView
+                    ? activeSavedResStatement.baseLabel ||
+                      (activeSavedResStatement.baseType === "physical"
+                        ? "Physical Cash Amount"
+                        : "Total Sell (Delivered Items)")
+                    : resSummaryBaseType === "physical"
+                    ? "Physical Cash Amount"
+                    : "Total Sell (Delivered Items)";
+
                   const displayData = isLockedView
                     ? activeSavedResStatement
                     : {
@@ -3024,6 +3257,7 @@ function App() {
                         fromDate: resSummaryStart,
                         toDate: resSummaryEnd,
                         deliveredCount: restaurantRangeSummary.deliveredCount,
+                        baseLabel: activeBaseLabel,
                         baseTotal: resSummaryCalculation.baseTotal,
                         plusSum: resSummaryCalculation.plusSum,
                         minusSum: resSummaryCalculation.minusSum,
@@ -3086,7 +3320,7 @@ function App() {
                               type="button"
                               className="primary-btn"
                               style={{ height: "34px", padding: "0 14px", fontSize: "12px", background: "#3b82f6" }}
-                              onClick={() => window.print()}
+                              onClick={() => handlePrintReport(`Restaurant_Statement_${displayData.restaurantName}`)}
                             >
                               🖨️ Print / PDF
                             </button>
@@ -3140,7 +3374,7 @@ function App() {
                               FROM {displayData.fromDate} TO {displayData.toDate}
                             </div>
                             <div style={{ fontSize: "18px", fontWeight: "900", color: "#0f172a", marginTop: "6px" }}>
-                              Total Delivered Items Amount: <span style={{ color: "#047857", fontSize: "22px" }}>{money(displayData.baseTotal)}</span>
+                              {activeBaseLabel}: <span style={{ color: "#047857", fontSize: "22px" }}>{money(displayData.baseTotal)}</span>
                             </div>
                           </div>
 
@@ -3180,7 +3414,7 @@ function App() {
                             }}
                           >
                             <div style={{ fontSize: "14px", fontWeight: "800", color: "#0f172a" }}>
-                              ➕ / ➖ Plus & Minus (Total Delivered Amount theke jog/biyog)
+                              ➕ / ➖ Plus & Minus ({activeBaseLabel} theke jog/biyog)
                             </div>
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px" }}>
                               <input
@@ -3247,7 +3481,7 @@ function App() {
                             }}
                           >
                             <div style={{ fontSize: "14px", fontWeight: "800", color: "#991b1b" }}>
-                              ⚠️ Fine Box (Total Delivered Amount theke minus hobe)
+                              ⚠️ Fine Box ({activeBaseLabel} theke minus hobe)
                             </div>
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px" }}>
                               <input
@@ -3308,7 +3542,7 @@ function App() {
                         <div className="panel-head" style={{ marginBottom: "12px" }}>
                           <div>
                             <h3>📋 Serial-Wise Calculation & Notes</h3>
-                            <p>Total Delivered Amount with serial-wise Plus (+), Minus (-), Fine, and Notes</p>
+                            <p>{activeBaseLabel} with serial-wise Plus (+), Minus (-), Fine, and Notes</p>
                           </div>
                         </div>
 
@@ -3327,11 +3561,11 @@ function App() {
                               <tr>
                                 <td><strong>1</strong></td>
                                 <td>
-                                  <span className="status good">Total Delivered Items Amount</span>
+                                  <span className="status good">{activeBaseLabel}</span>
                                 </td>
                                 <td><strong>{money(displayData.baseTotal)}</strong></td>
                                 <td style={{ whiteSpace: "normal" }}>
-                                  Total delivered items subtotal from {displayData.fromDate} to {displayData.toDate}
+                                  {activeBaseLabel} from {displayData.fromDate} to {displayData.toDate}
                                 </td>
                                 {!isLockedView && <td className="right print-hide">—</td>}
                               </tr>
@@ -4031,7 +4265,7 @@ function App() {
                     <button
                       type="button"
                       className="primary-btn"
-                      onClick={() => window.print()}
+                      onClick={() => handlePrintReport(`Rider_Statement_${selectedRider?.name || "Report"}`)}
                       style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}
                     >
                       🖨️ Print / Download PDF
@@ -4180,7 +4414,7 @@ function App() {
                               type="button"
                               className="primary-btn"
                               style={{ height: "34px", padding: "0 14px", fontSize: "12px", background: "#3b82f6" }}
-                              onClick={() => window.print()}
+                              onClick={() => handlePrintReport(`Rider_Statement_${displayData.riderName}`)}
                             >
                               🖨️ Print / PDF
                             </button>
@@ -4676,7 +4910,7 @@ function App() {
                 <button className="primary-btn" onClick={() => saveEntityReportArchive(historyType)} style={{ height: "38px", padding: "0 16px" }}>
                   💾 Save Permanent Report
                 </button>
-                <button className="primary-btn" onClick={() => window.print()} style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}>
+                <button className="primary-btn" onClick={() => handlePrintReport(`History_Report_${historyStart}_to_${historyEnd}`)} style={{ height: "38px", padding: "0 16px", background: "#3b82f6" }}>
                   🖨️ PDF Print
                 </button>
               </div>
@@ -4793,7 +5027,7 @@ function App() {
                 </div>
 
                 <div style={{ marginTop: "25px", display: "flex", justifyContent: "flex-end", gap: "10px", position: "relative", zIndex: 1 }} className="print-hide">
-                  <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+                  <button className="primary-btn" onClick={() => handlePrintReport("Restaurant_History_Report")} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
                   {activeReportPrintData && (
                     <button className="primary-btn" onClick={() => setActiveReportPrintData(null)} style={{ background: "#64748b" }}>Close Archive View</button>
                   )}
@@ -4885,7 +5119,7 @@ function App() {
                 </div>
 
                 <div style={{ marginTop: "25px", display: "flex", justifyContent: "flex-end", gap: "10px", position: "relative", zIndex: 1 }} className="print-hide">
-                  <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+                  <button className="primary-btn" onClick={() => handlePrintReport("Rider_History_Report")} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
                   {activeReportPrintData && (
                     <button className="primary-btn" onClick={() => setActiveReportPrintData(null)} style={{ background: "#64748b" }}>Close Archive View</button>
                   )}
@@ -5124,7 +5358,7 @@ function App() {
               </div>
               <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
                 <button className="primary-btn" onClick={saveCurrentPaperWorkReport}>💾 Save Permanent Report for {paperWorkDate}</button>
-                <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>Print / Download PDF View</button>
+                <button className="primary-btn" onClick={() => handlePrintReport(`Paper_Work_${paperWorkDate}`)} style={{ background: "#3b82f6" }}>Print / Download PDF View</button>
               </div>
             </div>
 
@@ -5235,7 +5469,7 @@ function App() {
                   </div>
                   {activePaperworkPrintReport && (
                     <div style={{ display: "flex", gap: "10px" }}>
-                      <button className="print-hide primary-btn" style={{ height: "32px", padding: "0 12px", background: "#3b82f6", fontSize: "11px" }} onClick={() => window.print()}>
+                      <button className="print-hide primary-btn" style={{ height: "32px", padding: "0 12px", background: "#3b82f6", fontSize: "11px" }} onClick={() => handlePrintReport(`Paper_Work_${activePaperworkPrintReport.date}`)}>
                         🖨️ Print / Download PDF
                       </button>
                       <button className="print-hide primary-btn" style={{ height: "32px", padding: "0 12px", background: "#64748b", fontSize: "11px" }} onClick={() => setActivePaperworkPrintReport(null)}>
@@ -5336,7 +5570,7 @@ function App() {
               </div>
 
               <div style={{ marginTop: "25px", display: "flex", justifyContent: "flex-end", gap: "10px", position: "relative", zIndex: 1 }} className="print-hide">
-                <button className="primary-btn" onClick={() => window.print()} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
+                <button className="primary-btn" onClick={() => handlePrintReport(`Paper_Work_${paperWorkDate}`)} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
                 {activePaperworkPrintReport && (
                   <button className="primary-btn" onClick={() => setActivePaperworkPrintReport(null)} style={{ background: "#64748b" }}>Close Saved View</button>
                 )}
@@ -5348,7 +5582,7 @@ function App() {
         <footer className="footer print-hide">Foodish Accounts · Firebase Firestore · Built for internal operations</footer>
       </main>
 
-      {/* FULL ORDER DETAILS MODAL (TRIGGERED BY CLICK & HOLD ON NOTE ROWS) */}
+      {/* FULL ORDER DETAILS MODAL */}
       {orderDetailModal && (
         <div
           className="modal-backdrop"
@@ -5766,6 +6000,17 @@ html,body{margin:0;padding:0;width:100%;max-width:100vw;overflow-x:hidden;scroll
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+@keyframes runnerMove {
+  0% { left: -36px; transform: scaleX(-1) translateY(0px); }
+  25% { transform: scaleX(-1) translateY(-3px); }
+  50% { transform: scaleX(-1) translateY(0px); }
+  75% { transform: scaleX(-1) translateY(-3px); }
+  100% { left: calc(100% + 10px); transform: scaleX(-1) translateY(0px); }
+}
+@keyframes logoBounce {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-10px) scale(1.06); }
+}
 
 .page-animate {
   animation: pageFadeSlide 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -5781,6 +6026,96 @@ html,body{margin:0;padding:0;width:100%;max-width:100vw;overflow-x:hidden;scroll
 }
 
 .app-shell{min-height:100vh;width:100%;max-width:100vw;overflow-x:hidden;display:flex;background:linear-gradient(180deg,#f4f7fb 0%,#eef2f7 100%)}
+
+/* APP LAUNCH RUNNING SPLASH SCREEN */
+.boot-screen.running-splash {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: radial-gradient(circle at 50% 40%, #ecfdf5 0%, #f4f7fb 55%, #e2e8f0 100%);
+  position: relative;
+  overflow: hidden;
+  padding: 24px;
+}
+.splash-glow-circle {
+  position: absolute;
+  width: 320px;
+  height: 320px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.14);
+  filter: blur(30px);
+  animation: floatSlow 4s ease-in-out infinite;
+}
+.splash-logo-wrap {
+  animation: logoBounce 1.3s ease-in-out infinite;
+  filter: drop-shadow(0 12px 24px rgba(220, 38, 38, 0.25));
+  z-index: 1;
+}
+.splash-brand-title {
+  font: 900 28px 'Plus Jakarta Sans', sans-serif;
+  color: #0f172a;
+  letter-spacing: -0.6px;
+  z-index: 1;
+}
+.splash-brand-title span {
+  color: #10b981;
+}
+.splash-runner-track {
+  width: min(300px, 82vw);
+  height: 34px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  z-index: 1;
+}
+.splash-runner-scooter {
+  position: absolute;
+  bottom: 6px;
+  font-size: 24px;
+  animation: runnerMove 1.65s linear infinite;
+}
+.splash-runner-bar {
+  width: 100%;
+  height: 5px;
+  background: #d1fae5;
+  border-radius: 99px;
+  overflow: hidden;
+  position: relative;
+}
+.splash-runner-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  background: linear-gradient(90deg, #10b981, #059669);
+  border-radius: 99px;
+  animation: load 1.2s ease-in-out infinite;
+}
+.splash-sync-text {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #065f46;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid #a7f3d0;
+  z-index: 1;
+}
+.sync-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  animation: pulseRing 1.4s infinite;
+}
 
 /* SIDEBAR */
 .sidebar{width:250px;background:linear-gradient(180deg,#0f172a 0%,#152238 100%);color:#d5deed;min-height:100vh;padding:27px 17px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:5;box-shadow:4px 0 24px rgba(15,23,42,0.12)}
@@ -5821,7 +6156,7 @@ html,body{margin:0;padding:0;width:100%;max-width:100vw;overflow-x:hidden;scroll
 .section-heading p,.panel-head p{font-size:12px;color:#64748b;margin:0}
 .date-label{font-size:11px;font-weight:600;color:#64748b;background:#fff;padding:6px 12px;border-radius:20px;border:1px solid #e2e8f0}
 
-/* STAT CARDS WITH STAGGERED ANIMATION & HOVER GLOW */
+/* STAT CARDS */
 .stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:20px}
 .stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
 .stat-card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:19px;min-width:0;box-shadow:0 2px 10px rgba(15,23,42,0.03);transition:transform 0.25s cubic-bezier(0.22,1,0.36,1),box-shadow 0.25s ease,border-color 0.25s ease;animation:cardRise 0.42s cubic-bezier(0.22,1,0.36,1) both}
@@ -5869,7 +6204,7 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
 .status.pending{background:#fef3c7;color:#b45309}
 .empty-cell{text-align:center;color:#94a3b8;padding:30px}
 
-/* BUTTONS WITH MICRO-INTERACTIONS */
+/* BUTTONS */
 .entry-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:2px 0 18px}
 .entry-form label{flex:1}
 .entry-form .note-field{flex:2;min-width:190px}
