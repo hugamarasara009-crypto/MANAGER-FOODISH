@@ -24,6 +24,7 @@ import {
   getDocs,
   where,
   limit,
+  setDoc,
 } from "firebase/firestore";
 
 const COLLECTIONS = {
@@ -257,6 +258,15 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState(null);
+
+  // GLOBAL SHARED ADMIN NOTE
+  const [floatingNoteOpen, setFloatingNoteOpen] = useState(false);
+  const [floatingNote, setFloatingNote] = useState("");
+  const [floatingNoteLoading, setFloatingNoteLoading] = useState(false);
+  const [floatingNoteSaving, setFloatingNoteSaving] = useState(false);
+  const [floatingNoteUpdatedAt, setFloatingNoteUpdatedAt] = useState(null);
+  const [floatingNoteUpdatedBy, setFloatingNoteUpdatedBy] = useState("");
+  const globalNoteRef = doc(db, "global_notes", "shared_admin_note");
 
   // App Launch Running Animation Splash State (Background data syncs immediately)
   const [showLaunchSplash, setShowLaunchSplash] = useState(true);
@@ -606,6 +616,64 @@ function App() {
 
     return () => unsubs.forEach((unsubscribe) => unsubscribe());
   }, [user]);
+
+  // Subscribe to the same shared note for every authorized admin.
+  useEffect(() => {
+    if (!user) {
+      setFloatingNote("");
+      setFloatingNoteUpdatedAt(null);
+      setFloatingNoteUpdatedBy("");
+      return undefined;
+    }
+
+    setFloatingNoteLoading(true);
+    const unsubscribe = onSnapshot(
+      globalNoteRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          setFloatingNote(data.content || "");
+          setFloatingNoteUpdatedAt(data.updatedAt || null);
+          setFloatingNoteUpdatedBy(data.updatedByName || data.updatedBy || "");
+        } else {
+          setFloatingNote("");
+          setFloatingNoteUpdatedAt(null);
+          setFloatingNoteUpdatedBy("");
+        }
+        setFloatingNoteLoading(false);
+      },
+      (error) => {
+        console.error("Shared note sync error:", error);
+        setFloatingNoteLoading(false);
+        setNotice({ type: "error", text: `Shared note could not be loaded: ${error.message}` });
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user]);
+
+  async function saveFloatingNote() {
+    if (!user || floatingNoteSaving || floatingNoteLoading) return;
+    setFloatingNoteSaving(true);
+    try {
+      await setDoc(
+        globalNoteRef,
+        {
+          content: floatingNote,
+          updatedAt: serverTimestamp(),
+          updatedBy: user.email || "",
+          updatedByName: user.displayName || user.email || "Admin",
+        },
+        { merge: true }
+      );
+      setNotice({ type: "success", text: "Shared admin note saved successfully!" });
+    } catch (error) {
+      console.error("Shared note save error:", error);
+      setNotice({ type: "error", text: `Note save failed: ${error.message}` });
+    } finally {
+      setFloatingNoteSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -6322,6 +6390,78 @@ function App() {
         </div>
       )}
 
+      {/* GLOBAL FLOATING SHARED ADMIN NOTE */}
+      {user && (
+        <>
+          {!floatingNoteOpen && (
+            <button
+              type="button"
+              className="global-note-fab print-hide"
+              onClick={() => setFloatingNoteOpen(true)}
+              title="Open shared admin note"
+              aria-label="Open shared admin note"
+            >
+              <span>📝</span>
+              <i />
+            </button>
+          )}
+
+          {floatingNoteOpen && (
+            <section className="global-note-window print-hide" role="dialog" aria-label="Shared admin note">
+              <header className="global-note-header">
+                <div className="global-note-heading">
+                  <span className="global-note-icon">📝</span>
+                  <div>
+                    <strong>Shared Admin Note</strong>
+                    <small><span className="global-note-live-dot" /> Live sync · All admins</small>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="global-note-close"
+                  onClick={() => setFloatingNoteOpen(false)}
+                  aria-label="Close note"
+                >×</button>
+              </header>
+
+              <div className="global-note-meta">
+                <span>{floatingNoteUpdatedBy ? `Last edited by ${floatingNoteUpdatedBy}` : "No saved note yet"}</span>
+                <span>{floatingNoteUpdatedAt?.toDate ? floatingNoteUpdatedAt.toDate().toLocaleString() : ""}</span>
+              </div>
+
+              <div className="global-note-editor-wrap">
+                {floatingNoteLoading ? (
+                  <div className="global-note-loading">Loading shared note…</div>
+                ) : (
+                  <textarea
+                    className="global-note-editor"
+                    value={floatingNote}
+                    onChange={(event) => setFloatingNote(event.target.value)}
+                    placeholder={'Write an important update for all admins…\n\nExamples:\n• Pending payments\n• Staff instructions\n• Daily reminders'}
+                    aria-label="Shared note content"
+                  />
+                )}
+              </div>
+
+              <footer className="global-note-footer">
+                <span className="global-note-user" title={user.email || "Admin"}>{user.displayName || user.email || "Admin"}</span>
+                <div className="global-note-actions">
+                  <button type="button" className="global-note-minimize" onClick={() => setFloatingNoteOpen(false)}>Close</button>
+                  <button
+                    type="button"
+                    className="global-note-save"
+                    onClick={saveFloatingNote}
+                    disabled={floatingNoteLoading || floatingNoteSaving}
+                  >
+                    {floatingNoteSaving ? "Saving…" : "💾 Save Note"}
+                  </button>
+                </div>
+              </footer>
+            </section>
+          )}
+        </>
+      )}
+
       {notice && <div className={`toast ${notice.type}`}><span>{notice.type === "success" ? "✓" : "!"}</span>{notice.text}</div>}
       {saving && <div className="saving-overlay"><div className="loader" /><strong>Saving your entry…</strong></div>}
     </div>
@@ -7127,6 +7267,18 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
 @media(max-width:680px){.sidebar{width:270px;max-width:82vw;padding:22px 17px;transform:translateX(-105%);transition:transform .32s cubic-bezier(.2,.8,.2,1);box-shadow:18px 0 50px #101b2e24}.sidebar.sidebar-open{transform:translateX(0)}.brand{padding:0 8px 30px}.brand>div:last-child,.side-label,.nav-link span:last-child,.sidebar-bottom{display:block}.nav-link{justify-content:flex-start;padding:14px 12px;min-height:46px}.main-area{margin-left:0;width:100%}.topbar{height:72px;padding:0 14px 0 58px;position:sticky}.mobile-menu-btn{display:grid;place-items:center;position:absolute;left:13px;top:18px;width:34px;height:34px;border:1px solid #e7edf2;border-radius:9px;background:#fff;color:#26364b;font-size:18px;cursor:pointer}.sidebar-scrim{display:block;position:fixed;inset:0;background:#0d1728a6;border:0;z-index:4;backdrop-filter:blur(2px);animation:modalBackdropFade 0.2s ease}.topbar h1{font-size:18px}.content{padding:16px 12px 30px}.section-heading{align-items:start;gap:10px;flex-direction:column}.section-heading h2{font-size:19px}.stats-grid,.stats-grid.two{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.stat-card{padding:14px;min-height:120px;border-radius:14px}.stat-icon{width:34px;height:34px}.stat-value{font-size:clamp(17px,4.8vw,22px)}.stat-label{font-size:11px}.stat-hint{font-size:10px;line-height:1.4}.panel{padding:14px;border-radius:14px}.filter-bar{padding:12px;gap:10px}.filter-bar label{flex:1 1 100%;min-width:0;font-size:11px}.filter-bar select,.filter-bar input,.entry-form input,.entry-form select{height:42px;font-size:14px}.entry-form{display:grid;grid-template-columns:1fr;gap:13px}.entry-form label,.entry-form .note-field{min-width:0}.entry-form label{font-size:11px}.entry-form .primary-btn{width:100%;height:46px;font-size:13px}.primary-btn,.delete-btn{min-height:40px}.table-wrap{border-radius:9px}th{font-size:10px;padding:13px 12px}td{font-size:12px;padding:14px 12px}.date-label{font-size:11px}.alert{margin:12px 13px 0}.today-chip{font-size:10px;padding:8px}.avatar{width:34px;height:34px}.footer{padding-bottom:30px}}
 @media(min-width:681px){.mobile-menu-btn,.sidebar-scrim{display:none}}
 @media(max-width:380px){.stats-grid,.stats-grid.two{grid-template-columns:1fr}.stat-card{min-height:unset}.topbar-right{gap:8px}.today-chip{display:none}}
+
+/* GLOBAL FLOATING SHARED ADMIN NOTE */
+.global-note-fab{position:fixed;right:25px;bottom:25px;z-index:9999;width:62px;height:62px;border:0;border-radius:50%;display:grid;place-items:center;background:linear-gradient(145deg,#10b981,#047857);color:#fff;font-size:27px;cursor:pointer;box-shadow:0 9px 28px rgba(5,150,105,.38);transition:transform .22s ease,box-shadow .22s ease}
+.global-note-fab:hover{transform:translateY(-4px) scale(1.05);box-shadow:0 14px 34px rgba(5,150,105,.46)}
+.global-note-fab i{position:absolute;right:3px;top:3px;width:12px;height:12px;border:2px solid #fff;border-radius:50%;background:#fbbf24}
+.global-note-window{position:fixed;right:22px;bottom:22px;z-index:9999;width:min(410px,calc(100vw - 28px));height:min(540px,calc(100dvh - 44px));min-height:300px;display:flex;flex-direction:column;overflow:hidden;background:#fff;border:1px solid #dce7e2;border-radius:20px;box-shadow:0 20px 65px rgba(15,23,42,.24);animation:modalPop .24s cubic-bezier(.16,1,.3,1) both}
+.global-note-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;background:linear-gradient(120deg,#064e3b,#059669 70%,#10b981);color:#fff}
+.global-note-heading{display:flex;align-items:center;gap:11px;min-width:0}.global-note-icon{width:40px;height:40px;flex:0 0 40px;display:grid;place-items:center;border-radius:13px;background:rgba(255,255,255,.16);font-size:21px}.global-note-heading strong{display:block;font:800 15px 'Plus Jakarta Sans',sans-serif}.global-note-heading small{display:flex;align-items:center;gap:6px;margin-top:4px;color:#d1fae5;font-size:10px}.global-note-live-dot{width:7px;height:7px;border-radius:50%;background:#86efac;box-shadow:0 0 0 3px rgba(134,239,172,.15)}
+.global-note-close{width:34px;height:34px;flex:0 0 34px;border:1px solid rgba(255,255,255,.28);border-radius:10px;background:rgba(255,255,255,.13);color:#fff;font-size:23px;line-height:1;cursor:pointer}.global-note-meta{display:flex;justify-content:space-between;gap:8px;padding:11px 16px 7px;color:#64748b;font-size:10px}.global-note-meta span:last-child{text-align:right}.global-note-editor-wrap{position:relative;flex:1;min-height:0;padding:8px 15px 13px}.global-note-editor{width:100%;height:100%;min-height:130px;resize:none;border:1px solid #dce6e2;border-radius:13px;padding:14px;background:#f8fbf9;color:#1e293b;font:13px/1.75 'DM Sans',sans-serif;outline:none;transition:border-color .2s,box-shadow .2s}.global-note-editor:focus{border-color:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,.1)}.global-note-editor::placeholder{color:#94a3b8}.global-note-loading{display:grid;place-items:center;height:100%;color:#64748b;font-size:13px}.global-note-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px 15px;border-top:1px solid #edf2ef;background:#fff}.global-note-user{max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#64748b;font-size:10px}.global-note-actions{display:flex;align-items:center;gap:8px}.global-note-minimize{height:38px;padding:0 12px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;color:#475569;font-size:11px;font-weight:700;cursor:pointer}.global-note-save{height:38px;padding:0 15px;border:0;border-radius:10px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-size:11px;font-weight:800;cursor:pointer;box-shadow:0 4px 10px rgba(5,150,105,.16)}.global-note-save:disabled{opacity:.55;cursor:not-allowed}
+@media(max-width:520px){.global-note-fab{right:16px;bottom:16px;width:56px;height:56px;font-size:24px}.global-note-window{right:10px;bottom:10px;width:calc(100vw - 20px);height:min(520px,calc(100dvh - 20px));border-radius:17px}.global-note-header{padding:14px}.global-note-meta{font-size:9px;padding:10px 13px 6px}.global-note-editor-wrap{padding:7px 12px 11px}.global-note-footer{padding:10px 12px 12px}}
+@media print{.global-note-fab,.global-note-window{display:none!important}}
+
 `;
 
 export default App;
