@@ -7547,6 +7547,29 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   .history-print-box .table-wrap { overflow: visible !important; }
 }
 
+/* Online payment print: compact summary cards and transaction rows for one A4 page. */
+@media print {
+  .online-payment-page .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 1.5mm !important; margin: 0 0 2mm !important; }
+  .online-payment-page .stats-grid .stat-card { min-height: 0 !important; height: auto !important; padding: 1.2mm 1.8mm !important; border-radius: 1.2mm !important; gap: .5mm !important; }
+  .online-payment-page .stats-grid .stat-icon { width: 4mm !important; height: 4mm !important; min-width: 4mm !important; font-size: 6pt !important; margin: 0 0 .5mm !important; }
+  .online-payment-page .stats-grid .stat-label { font-size: 5.8pt !important; line-height: 1.05 !important; margin: 0 !important; }
+  .online-payment-page .stats-grid .stat-value { font-size: 8.5pt !important; line-height: 1.08 !important; margin: .3mm 0 0 !important; }
+  .online-payment-page .stats-grid .stat-hint { font-size: 5pt !important; line-height: 1.05 !important; margin: .2mm 0 0 !important; }
+  .online-payment-page .online-payment-print-header { margin-bottom: 2mm !important; }
+  .online-payment-page .online-payment-print-header h1 { font-size: 12pt !important; line-height: 1.08 !important; margin: 0 0 .7mm !important; }
+  .online-payment-page .online-payment-print-header span { font-size: 16pt !important; }
+  .online-payment-page .online-payment-print-header p { font-size: 6.5pt !important; }
+  .online-payment-page .printable-report-area { min-height: 278mm !important; padding: 2mm !important; box-sizing: border-box !important; }
+  .online-payment-page .online-transaction-columns { gap: 2mm !important; }
+  .online-payment-page .online-transaction-column table { font-size: 6.2pt !important; }
+  .online-payment-page .online-transaction-column th, .online-payment-page .online-transaction-column td { font-size: 6.2pt !important; line-height: 1.08 !important; padding: .75mm .7mm !important; }
+  .online-payment-page .online-transaction-phone { font-size: 5.4pt !important; margin-top: .2mm !important; }
+  .online-payment-page .online-transaction-amount { font-size: 6.5pt !important; margin-top: .2mm !important; }
+  .online-payment-page .online-transaction-column .status { font-size: 5.2pt !important; padding: .25mm .6mm !important; }
+  .online-payment-page .online-transaction-total { font-size: 8pt !important; padding: 1.5mm 2mm !important; margin-top: 1.5mm !important; }
+}
+
+
 `;
 
 export default App;
