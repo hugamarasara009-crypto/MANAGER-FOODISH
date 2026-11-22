@@ -7433,6 +7433,120 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   .paperwork-page .print-hide { display: none !important; }
 }
 
+
+/* Rider COD statement: compact A4 single-page print layout. */
+@media print {
+  @page { size: A4 portrait; margin: 5mm; }
+  .history-print-box {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 1.5mm !important;
+    margin: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
+    font-size: 6.6pt !important;
+    line-height: 1.12 !important;
+    position: relative !important;
+  }
+  .history-print-box .print-header {
+    margin: 0 0 2mm !important;
+  }
+  .history-print-box .print-header > div {
+    gap: 1.5mm !important;
+    margin-bottom: 1mm !important;
+  }
+  .history-print-box .print-header span {
+    font-size: 17pt !important;
+    letter-spacing: 1px !important;
+  }
+  .history-print-box .print-header h1 {
+    font-size: 12pt !important;
+    line-height: 1.12 !important;
+    margin: 0 0 1mm !important;
+  }
+  .history-print-box .print-header p {
+    font-size: 7pt !important;
+    line-height: 1.15 !important;
+  }
+  .history-print-box .print-header img {
+    width: 22px !important;
+    height: 22px !important;
+  }
+  .history-print-box > div[style*="linear-gradient"] {
+    padding: 2mm 2.5mm !important;
+    margin: 0 0 2mm !important;
+    border-width: 1px !important;
+    border-radius: 2mm !important;
+  }
+  .history-print-box > div[style*="linear-gradient"] > div {
+    gap: 2mm !important;
+  }
+  .history-print-box > div[style*="linear-gradient"] div {
+    line-height: 1.15 !important;
+  }
+  .history-print-box > div[style*="linear-gradient"] div[style*="font-size: 34px"] {
+    font-size: 19pt !important;
+  }
+  .history-print-box .panel {
+    padding: 1.5mm !important;
+    margin: 0 0 1.5mm !important;
+    border: 1px solid #dbe4ec !important;
+    border-radius: 1.5mm !important;
+    box-shadow: none !important;
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+  }
+  .history-print-box .panel-head {
+    margin: 0 0 1mm !important;
+    padding: 0 !important;
+  }
+  .history-print-box .panel-head h3,
+  .history-print-box .panel-head h2 {
+    font-size: 8pt !important;
+    line-height: 1.1 !important;
+    margin: 0 !important;
+  }
+  .history-print-box table {
+    width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: collapse !important;
+    font-size: 6.2pt !important;
+    line-height: 1.08 !important;
+  }
+  .history-print-box table th,
+  .history-print-box table td {
+    font-size: 6.2pt !important;
+    line-height: 1.08 !important;
+    padding: .65mm .75mm !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+  .history-print-box table th { font-weight: 800 !important; }
+  .history-print-box .holdable-note-row td { padding: .55mm .7mm !important; }
+  .history-print-box .status { font-size: 6pt !important; padding: 0.3mm 0.7mm !important; }
+  .history-print-box .count-pill { font-size: 6pt !important; padding: .3mm 1mm !important; }
+  .history-print-box > div[style*="margin-top: 60px"] {
+    margin-top: 4mm !important;
+    padding-top: 2mm !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+  .history-print-box > div[style*="margin-top: 60px"] strong {
+    font-size: 7pt !important;
+  }
+  .history-print-box .pdf-watermark-logo {
+    display: block !important;
+    width: 48% !important;
+    opacity: .065 !important;
+    z-index: 0 !important;
+  }
+  .history-print-box .pdf-watermark-logo img { width: 100% !important; }
+  .history-print-box .print-hide { display: none !important; }
+  .history-print-box .table-wrap { overflow: visible !important; }
+}
+
 `;
 
 export default App;
