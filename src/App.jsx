@@ -395,9 +395,13 @@ function App() {
         setNotice({ type: "error", text: `Print/PDF failed: ${error.message}` });
       }
     } else {
-      setTimeout(() => {
-        window.print();
-      }, 150);
+      const restoreTitle = () => {
+        document.title = "Foodish Accounts Dashboard";
+        window.removeEventListener("afterprint", restoreTitle);
+      };
+      window.addEventListener("afterprint", restoreTitle, { once: true });
+      requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+      // Keep the report title during Save as PDF; afterprint restores the app title.
     }
   }
 
@@ -1027,23 +1031,10 @@ function App() {
       const totalOrderAmount = riderOrdersOnDate.reduce((sum, o) => sum + orderAmount(o), 0);
       const chargeAmount = totalOrderAmount - billAmount;
 
-      const riderEntries = managementEntries.filter(
-        (e) =>
-          e.entityType === "rider" &&
-          String(e.entityId) === String(rId) &&
-          dateKey(e.date || e.createdAt) === paperWorkDate
-      );
-
-      const collectAmount = riderEntries
-        .filter((e) => ["collection", "physical"].includes(normalized(e.type)))
-        .reduce((sum, e) => sum + Number(e.amount || 0), 0);
-
-      const salaryEntry = riderEntries.find((e) => normalized(e.type) === "salary");
-      const salaryAmount = salaryEntry ? Number(salaryEntry.amount || 0) : 0;
-
-      const fineAmount = riderEntries
-        .filter((e) => normalized(e.type) === "fine")
-        .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+      // Collected means COD collected from delivered orders.
+      const collectAmount = riderOrdersOnDate
+        .filter(isCOD)
+        .reduce((sum, order) => sum + orderAmount(order), 0);
 
       return {
         riderId: rId,
@@ -1053,11 +1044,9 @@ function App() {
         bill: billAmount,
         charge: chargeAmount,
         collect: collectAmount,
-        salary: salaryAmount,
-        fine: fineAmount,
       };
     });
-  }, [paperWorkRiderIds, paperWorkDate, orders, riders, managementEntries]);
+  }, [paperWorkRiderIds, paperWorkDate, orders, riders]);
 
   const paperWorkTotals = useMemo(() => {
     return paperWorkTableRows.reduce(
@@ -1067,10 +1056,8 @@ function App() {
         bill: acc.bill + row.bill,
         charge: acc.charge + row.charge,
         collect: acc.collect + row.collect,
-        salary: acc.salary + row.salary,
-        fine: acc.fine + row.fine,
       }),
-      { delivered: 0, online: 0, bill: 0, charge: 0, collect: 0, salary: 0, fine: 0 }
+      { delivered: 0, online: 0, bill: 0, charge: 0, collect: 0 }
     );
   }, [paperWorkTableRows]);
 
@@ -1090,13 +1077,16 @@ function App() {
       };
 
       const existing = firestorePaperReports.find((r) => r.date === paperWorkDate);
+      let reportId = existing?.id || "";
       if (existing) {
         await updateDoc(doc(db, COLLECTIONS.paperworkReports, existing.id), reportData);
       } else {
-        await addDoc(collection(db, COLLECTIONS.paperworkReports), reportData);
+        const created = await addDoc(collection(db, COLLECTIONS.paperworkReports), reportData);
+        reportId = created.id;
       }
 
-      setNotice({ type: "success", text: `Paper Work report for ${paperWorkDate} permanently saved!` });
+      setActivePaperworkPrintReport({ id: reportId, ...reportData });
+      setNotice({ type: "success", text: `Paper Work report for ${paperWorkDate} permanently saved and ready to print!` });
     } catch (error) {
       setNotice({ type: "error", text: `Save failed: ${error.message}` });
     } finally {
@@ -1121,12 +1111,12 @@ function App() {
 
   const downloadSavedReportCSV = (report) => {
     let csvContent = `Paper Work Report - Date: ${report.date}\n\n`;
-    csvContent += "Name,Delivered,Online,Bill,Charge,Salary,Fine\n";
+    csvContent += "Name,Delivered,Online,Bill,Charge,Collected (COD)\n";
     report.rows.forEach((r) => {
-      csvContent += `"${r.name}",${r.delivered},${r.online},${r.bill},${r.charge},${r.salary},${r.fine}\n`;
+      csvContent += `"${r.name}",${r.delivered},${r.online},${r.bill},${r.charge},${r.collect}\n`;
     });
 
-    csvContent += `\nAll Total,,${report.totals.online},${report.totals.bill},${report.totals.charge},${report.totals.salary},${report.totals.fine}\n`;
+    csvContent += `\nAll Total,,${report.totals.online},${report.totals.bill},${report.totals.charge},${report.totals.collect}\n`;
     csvContent += `\nProfit Summary (Formula: Bill*9.41% + Charge),,${report.profit}\n`;
 
     downloadCsvFile(`paper_work_report_${report.date}.csv`, csvContent);
@@ -2993,7 +2983,7 @@ function App() {
 
         {/* 2. ONLINE PAYMENT REPORT PAGE (bKash, Nagad, Rocket) */}
         {page === "online-payment" && (
-          <section key="page-online-payment" className="content page-animate">
+          <section key="page-online-payment" className="content page-animate online-payment-page">
             <div className="section-heading print-hide">
               <div>
                 <h2>Online Payment Orders Report</h2>
@@ -3043,7 +3033,7 @@ function App() {
                 <FoodishLogo size={360} />
               </div>
 
-              <div className="print-header" style={{ textAlign: "center", marginBottom: "30px", position: "relative", zIndex: 1 }}>
+              <div className="print-header online-payment-print-header" style={{ textAlign: "center", marginBottom: "30px", position: "relative", zIndex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginBottom: "4px" }}>
                   <FoodishLogo size={36} />
                   <span style={{ fontSize: "28px", fontWeight: "900", letterSpacing: "2px", color: "#10b981" }}>FOODISH</span>
@@ -3121,9 +3111,6 @@ function App() {
                 </div>
               </div>
 
-              <div style={{ marginTop: "30px", display: "flex", justifyContent: "flex-end", position: "relative", zIndex: 1 }} className="print-hide">
-                <button className="primary-btn" onClick={() => handlePrintReport(`Online_Payments_${onlinePayDate}`)} style={{ background: "#3b82f6" }}>🖨️ Print / Download PDF</button>
-              </div>
             </div>
           </section>
         )}
@@ -5488,7 +5475,7 @@ function App() {
                   </div>
                 </div>
 
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
+                <div className="paperwork-signatures" style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
                   <div style={{ textAlign: "center", width: "220px" }}>
                     <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
                     <strong style={{ fontSize: "14px", color: "#0f172a" }}>Restaurant Owner Sign</strong>
@@ -5980,8 +5967,7 @@ function App() {
                         <th>Online</th>
                         <th>Bill</th>
                         <th>Charge</th>
-                        <th>Salary</th>
-                        <th>Fine</th>
+                        <th>Collected (COD)</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -5992,35 +5978,12 @@ function App() {
                           <td>{money(row.online)}</td>
                           <td>{money(row.bill)}</td>
                           <td>{money(row.charge)}</td>
-                          <td>
-                            {activePaperworkPrintReport ? (
-                              money(row.salary)
-                            ) : (
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={row.salary}
-                                onChange={(e) =>
-                                  handleUpdateManagementEntry({
-                                    entityType: "rider",
-                                    entityId: row.riderId,
-                                    entityName: row.name,
-                                    type: "salary",
-                                    amount: e.target.value,
-                                    date: paperWorkDate,
-                                  })
-                                }
-                                style={{ width: "90px", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e1", fontWeight: "700", fontSize: "13px" }}
-                              />
-                            )}
-                          </td>
-                          <td>{money(row.fine)}</td>
+                          <td><strong style={{ color: "#047857" }}>{money(row.collect ?? 0)}</strong></td>
                         </tr>
                       ))}
                       {!activePaperworkPrintReport && paperWorkTableRows.length === 0 && (
                         <tr>
-                          <td colSpan={7} className="empty-cell">Please select at least one rider to view paper work metrics.</td>
+                          <td colSpan={6} className="empty-cell">Please select at least one rider to view paper work metrics.</td>
                         </tr>
                       )}
                     </tbody>
@@ -6032,8 +5995,7 @@ function App() {
                           <th>{money(activePaperworkPrintReport ? activePaperworkPrintReport.totals.online : paperWorkTotals.online)}</th>
                           <th>{money(activePaperworkPrintReport ? activePaperworkPrintReport.totals.bill : paperWorkTotals.bill)}</th>
                           <th>{money(activePaperworkPrintReport ? activePaperworkPrintReport.totals.charge : paperWorkTotals.charge)}</th>
-                          <th>{money(activePaperworkPrintReport ? activePaperworkPrintReport.totals.salary : paperWorkTotals.salary)}</th>
-                          <th>{money(activePaperworkPrintReport ? activePaperworkPrintReport.totals.fine : paperWorkTotals.fine)}</th>
+                          <th>{money(activePaperworkPrintReport ? (activePaperworkPrintReport.totals.collect ?? 0) : paperWorkTotals.collect)}</th>
                         </tr>
                       </tfoot>
                     )}
@@ -6041,7 +6003,7 @@ function App() {
                 </div>
               </div>
 
-              <div style={{ marginTop: "30px", padding: "25px", background: "linear-gradient(135deg, #f0fdf4 0%, #e6f6ef 100%)", border: "2px solid #bbf7d0", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
+              <div className="paperwork-profit-summary" style={{ marginTop: "30px", padding: "25px", background: "linear-gradient(135deg, #f0fdf4 0%, #e6f6ef 100%)", border: "2px solid #bbf7d0", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
                 <div style={{ fontSize: "14px", fontWeight: "800", color: "#15803d", letterSpacing: "1px" }}>PROFIT SUMMARY</div>
                 <div style={{ fontSize: "40px", fontWeight: "900", color: "#14532d", margin: "6px 0 0" }}>
                   {money(activePaperworkPrintReport ? activePaperworkPrintReport.profit : calculatedProfit)}
@@ -7204,6 +7166,10 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
     size: A4 portrait;
     margin: 5mm;
   }
+  @page onlineHistory {
+    size: A4 landscape;
+    margin: 5mm;
+  }
   *, *::before, *::after {
     animation: none !important;
     transition: none !important;
@@ -7260,6 +7226,88 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   }
   tr {
     page-break-inside: avoid !important;
+  }
+  /* Online payment history: compact A4 print layout, usually 1–2 pages. */
+  .online-payment-page {
+    page: onlineHistory;
+  }
+  .online-payment-page .printable-report-area {
+    padding: 2mm !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+  }
+  .online-payment-page .online-payment-print-header {
+    margin-bottom: 4mm !important;
+  }
+  .online-payment-page .online-payment-print-header h1 {
+    font-size: 15pt !important;
+    margin: 0 0 2mm !important;
+  }
+  .online-payment-page .online-payment-print-header p {
+    font-size: 9pt !important;
+  }
+  .online-payment-page .online-payment-print-header svg {
+    width: 22px !important;
+    height: 22px !important;
+  }
+  .online-payment-page .online-payment-print-header span {
+    font-size: 17pt !important;
+    letter-spacing: 1px !important;
+  }
+  .online-payment-page .table-wrap {
+    overflow: visible !important;
+    border: 0 !important;
+  }
+  .online-payment-page table {
+    font-size: 8pt !important;
+    table-layout: fixed !important;
+  }
+  .online-payment-page table th,
+  .online-payment-page table td {
+    font-size: 8pt !important;
+    padding: 2mm 1.5mm !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+  .online-payment-page table th:nth-child(1),
+  .online-payment-page table td:nth-child(1) { width: 22% !important; }
+  .online-payment-page table th:nth-child(2),
+  .online-payment-page table td:nth-child(2) { width: 15% !important; }
+  .online-payment-page table th:nth-child(3),
+  .online-payment-page table td:nth-child(3) { width: 38% !important; }
+  .online-payment-page table th:nth-child(4),
+  .online-payment-page table td:nth-child(4) { width: 25% !important; }
+  .online-payment-page .status {
+    font-size: 7pt !important;
+    padding: 1mm 2mm !important;
+  }
+  .online-payment-page .print-hide,
+  .online-payment-page .section-heading,
+  .online-payment-page .stats-grid {
+    display: none !important;
+  }
+  .online-payment-page .panel {
+    margin: 0 !important;
+  }
+  .online-payment-page .printable-report-area {
+    page-break-before: avoid !important;
+    page-break-after: auto !important;
+  }
+  #root .content:has(.paperwork-profit-summary) .printable-report-area {
+    padding: 2mm !important;
+  }
+  .paperwork-profit-summary {
+    margin-top: 5mm !important;
+    padding: 4mm !important;
+    break-inside: avoid !important;
+  }
+  .paperwork-profit-summary > div:nth-child(2) {
+    font-size: 22pt !important;
+  }
+  .paperwork-signatures {
+    margin-top: 12mm !important;
+    padding-top: 4mm !important;
+    break-inside: avoid !important;
   }
 }
 @media(max-width:520px){.login-page{padding:22px 14px 58px}.login-card{padding:37px 24px 29px;border-radius:20px}.login-card h1{font-size:24px}.login-brand-name{font-size:23px}.login-description{font-size:12px}}
