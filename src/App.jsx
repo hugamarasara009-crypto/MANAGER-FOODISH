@@ -3129,67 +3129,58 @@ function App() {
               </div>
 
               <div className="panel" style={{ border: 0, padding: 0, boxShadow: "none", position: "relative", zIndex: 1 }}>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Time</th>
-                        <th>Order ID</th>
-                        <th>Customer Name & Phone</th>
-                        <th style={{ minWidth: "130px" }}>Payment Method & Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {onlinePaymentOrders.map((order) => {
-                        const paymentMethodName = getPaymentMethod(order) || "Online";
-                        const norm = normalized(paymentMethodName);
-                        const isBk = norm.includes("bkash");
-                        const isNag = norm.includes("nagad");
-                        const isRoc = norm.includes("rocket");
-
-                        return (
-                          <tr key={order.id}>
-                            <td>{formatDateTime(order.createdAt)}</td>
-                            <td><strong>#{order.orderId || order.id.slice(0, 8)}</strong></td>
-                            <td>
-                              <div><strong>{order.userName || "—"}</strong></div>
-                              <small className="cell-sub" style={{ color: "#2563eb", fontWeight: "700" }}>{order.userPhone || "No Phone"}</small>
-                            </td>
-                            <td style={{ minWidth: "130px" }}>
-                              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "7px" }}>
-                                <span
-                                  className="status"
-                                  style={{
-                                    textTransform: "uppercase",
-                                    background: isBk ? "#fce7f3" : isNag ? "#ffedd5" : isRoc ? "#ede9fe" : "#f1f5f9",
-                                    color: isBk ? "#db2777" : isNag ? "#ea580c" : isRoc ? "#7c3aed" : "#475569",
-                                  }}
-                                >
-                                  {paymentMethodName}
-                                </span>
-                                <strong style={{ color: "#047857", fontSize: "14px" }}>
-                                  {money(orderAmount(order))}
-                                </strong>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {onlinePaymentOrders.length === 0 && (
-                        <tr>
-                          <td colSpan={4} className="empty-cell">No online payment orders found for {onlinePayDate}.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                    {onlinePaymentOrders.length > 0 && (
-                      <tfoot>
-                        <tr>
-                          <th colSpan={3}>Total Online Collection</th>
-                          <th className="right">{money(onlinePaymentTotals.total)}</th>
-                        </tr>
-                      </tfoot>
-                    )}
-                  </table>
+                <div className="online-transaction-layout">
+                  {onlinePaymentOrders.length > 0 ? (
+                    <div className="online-transaction-columns">
+                      {[onlinePaymentOrders.slice(0, Math.ceil(onlinePaymentOrders.length / 2)), onlinePaymentOrders.slice(Math.ceil(onlinePaymentOrders.length / 2))].map((columnOrders, columnIndex) => (
+                        <div className="table-wrap online-transaction-column" key={`transaction-column-${columnIndex}`}>
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Time</th>
+                                <th>Customer</th>
+                                <th>Method / Amount</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {columnOrders.map((order) => {
+                                const paymentMethodName = getPaymentMethod(order) || "Online";
+                                const norm = normalized(paymentMethodName);
+                                const isBk = norm.includes("bkash");
+                                const isNag = norm.includes("nagad");
+                                const isRoc = norm.includes("rocket");
+                                return (
+                                  <tr key={order.id}>
+                                    <td>{formatDateTime(order.createdAt)}</td>
+                                    <td>
+                                      <strong>{order.userName || "—"}</strong>
+                                      <small className="cell-sub online-transaction-phone">{order.userPhone || "No Phone"}</small>
+                                    </td>
+                                    <td>
+                                      <span className="status" style={{
+                                        textTransform: "uppercase",
+                                        background: isBk ? "#fce7f3" : isNag ? "#ffedd5" : isRoc ? "#ede9fe" : "#f1f5f9",
+                                        color: isBk ? "#db2777" : isNag ? "#ea580c" : isRoc ? "#7c3aed" : "#475569",
+                                      }}>{paymentMethodName}</span>
+                                      <strong className="online-transaction-amount">{money(orderAmount(order))}</strong>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="empty-cell">No online payment orders found for {onlinePayDate}.</div>
+                  )}
+                  {onlinePaymentOrders.length > 0 && (
+                    <div className="online-transaction-total">
+                      <strong>Total Online Collection</strong>
+                      <strong>{money(onlinePaymentTotals.total)}</strong>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -7263,6 +7254,13 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   }
 }
 
+.online-transaction-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.online-transaction-column { min-width: 0; }
+.online-transaction-phone { display: block; margin-top: 3px; color: #2563eb; font-weight: 700; }
+.online-transaction-amount { display: block; margin-top: 4px; color: #047857; }
+.online-transaction-total { display: flex; justify-content: space-between; gap: 12px; padding: 12px 14px; margin-top: 14px; border-radius: 8px; background: #ecfdf5; color: #047857; }
+@media(max-width:760px){.online-transaction-columns{grid-template-columns:1fr}}
+
 @media print {
   @page { size: A4 portrait; margin: 5mm; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -7333,7 +7331,33 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   .online-payment-page .status { font-size: 6pt !important; padding: .5mm 1mm !important; }
   .online-payment-page .print-hide, .online-payment-page .section-heading { display: none !important; }
   .online-payment-page .panel { margin: 0 !important; }
-  .online-payment-page .printable-report-area { page-break-before: avoid !important; }
+  .online-payment-page .printable-report-area {
+    min-height: 280mm !important;
+    box-sizing: border-box !important;
+    padding: 3mm 2mm !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+  .online-payment-page .online-payment-print-header { margin-bottom: 4mm !important; }
+  .online-payment-page .online-payment-print-header h1 { font-size: 15pt !important; margin-bottom: 2mm !important; }
+  .online-payment-page .online-payment-print-header span { font-size: 19pt !important; }
+  .online-payment-page .online-transaction-layout { position: relative !important; z-index: 2 !important; flex: 1 1 auto !important; display: flex !important; flex-direction: column !important; }
+  .online-payment-page .online-transaction-columns { display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; gap: 4mm !important; align-items: start !important; }
+  .online-payment-page .online-transaction-column { min-width: 0 !important; }
+  .online-payment-page .online-transaction-column table { width: 100% !important; table-layout: fixed !important; font-size: 8pt !important; }
+  .online-payment-page .online-transaction-column th,
+  .online-payment-page .online-transaction-column td { font-size: 7.7pt !important; padding: 1.6mm 1.2mm !important; line-height: 1.25 !important; vertical-align: top !important; }
+  .online-payment-page .online-transaction-column th:nth-child(1), .online-payment-page .online-transaction-column td:nth-child(1) { width: 27% !important; }
+  .online-payment-page .online-transaction-column th:nth-child(2), .online-payment-page .online-transaction-column td:nth-child(2) { width: 39% !important; }
+  .online-payment-page .online-transaction-column th:nth-child(3), .online-payment-page .online-transaction-column td:nth-child(3) { width: 34% !important; }
+  .online-payment-page .online-transaction-phone { display: block !important; margin-top: .6mm !important; font-size: 6.7pt !important; color: #2563eb !important; overflow-wrap: anywhere !important; }
+  .online-payment-page .online-transaction-amount { display: block !important; margin-top: .7mm !important; color: #047857 !important; font-size: 8pt !important; }
+  .online-payment-page .online-transaction-column .status { display: inline-block !important; font-size: 6.5pt !important; padding: .7mm 1mm !important; }
+  .online-payment-page .online-transaction-total { display: flex !important; justify-content: space-between !important; gap: 5mm !important; padding: 2.5mm 3mm !important; margin-top: 3mm !important; border-top: 1px solid #94a3b8 !important; background: #ecfdf5 !important; font-size: 10pt !important; position: relative !important; z-index: 2 !important; }
+  .online-payment-page .pdf-watermark-logo { display: block !important; opacity: .10 !important; width: 58% !important; }
+  .online-payment-page .stats-grid { margin-bottom: 3mm !important; }
+  .online-payment-page .stats-grid .stat-card { padding: 2.5mm 3mm !important; }
+  .online-payment-page .printable-report-area { page-break-before: avoid !important; page-break-after: auto !important; }
 }
 @media(max-width:520px){.login-page{padding:22px 14px 58px}.login-card{padding:37px 24px 29px;border-radius:20px}.login-card h1{font-size:24px}.login-brand-name{font-size:23px}.login-description{font-size:12px}}
 @media(max-width:1000px){.sidebar{width:210px}.main-area{margin-left:210px;width:calc(100% - 210px)}.content{padding:24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
