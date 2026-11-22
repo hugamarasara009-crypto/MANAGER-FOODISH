@@ -7657,29 +7657,57 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
 }
 
 
-/* Paper Work print typography enlarged to approximately 2x for readability. */
+/* Paper Work: balanced typography and compact single-page A4 print layout. */
 @media print {
-  .paperwork-page .printable-report-area { padding: 4mm 5mm !important; }
-  .paperwork-page .print-header { margin-bottom: 6mm !important; }
-  .paperwork-page .print-header h1 { font-size: 32pt !important; line-height: 1.2 !important; }
-  .paperwork-page .print-header p { font-size: 18pt !important; }
-  .paperwork-page .print-header img { width: 58px !important; height: 58px !important; }
-  .paperwork-page .print-header span { font-size: 40pt !important; }
-  .paperwork-page table { font-size: 16pt !important; }
+  @page { size: A4 portrait; margin: 5mm; }
+  .paperwork-page,
+  .paperwork-page .printable-report-area {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 0 !important;
+    height: auto !important;
+    padding: 2mm 2.5mm !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+  .paperwork-page .printable-report-area {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+  .paperwork-page .print-header { margin: 0 0 2.5mm !important; }
+  .paperwork-page .print-header h1 { font-size: 20pt !important; line-height: 1.12 !important; margin: 0 0 1mm !important; }
+  .paperwork-page .print-header p { font-size: 9pt !important; line-height: 1.15 !important; margin: 0 !important; }
+  .paperwork-page .print-header img { width: 34px !important; height: 34px !important; }
+  .paperwork-page .print-header span { font-size: 22pt !important; }
+  .paperwork-page .table-wrap { overflow: visible !important; margin: 0 !important; }
+  .paperwork-page table { width: 100% !important; table-layout: fixed !important; border-collapse: collapse !important; font-size: 9.5pt !important; }
   .paperwork-page table th,
   .paperwork-page table td {
-    font-size: 16pt !important;
-    padding: 2.8mm 2.3mm !important;
-    line-height: 1.25 !important;
+    font-size: 9.5pt !important;
+    padding: 1.1mm .9mm !important;
+    line-height: 1.12 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
   }
-  .paperwork-page .paperwork-salary-print { margin-top: 6mm !important; }
-  .paperwork-page .paperwork-salary-print h2 { font-size: 20pt !important; }
-  .paperwork-page .paperwork-profit-summary { margin-top: 8mm !important; padding: 8mm !important; }
-  .paperwork-page .paperwork-profit-summary > div:first-child { font-size: 18pt !important; }
-  .paperwork-page .paperwork-profit-summary > div:nth-child(2) { font-size: 42pt !important; }
-  .paperwork-page .paperwork-profit-summary > div:nth-child(3) { font-size: 16pt !important; }
-  .paperwork-page .paperwork-signatures { padding-top: 25mm !important; }
-  .paperwork-page .paperwork-signatures strong { font-size: 18pt !important; }
+  .paperwork-page .paperwork-salary-print { margin-top: 2.5mm !important; break-inside: avoid !important; page-break-inside: avoid !important; }
+  .paperwork-page .paperwork-salary-print h2 { font-size: 11pt !important; line-height: 1.1 !important; margin: 0 0 1mm !important; }
+  .paperwork-page .paperwork-profit-summary {
+    margin: 2.5mm 0 0 !important; padding: 2.5mm 3mm !important;
+    break-inside: avoid !important; page-break-inside: avoid !important;
+  }
+  .paperwork-page .paperwork-profit-summary > div:first-child { font-size: 10pt !important; line-height: 1.1 !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(2) { font-size: 25pt !important; line-height: 1.05 !important; margin: .8mm 0 0 !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(3) { font-size: 8.5pt !important; line-height: 1.15 !important; margin-top: .8mm !important; }
+  .paperwork-page .paperwork-signatures {
+    margin-top: 3mm !important; padding-top: 7mm !important;
+    break-inside: avoid !important; page-break-inside: avoid !important;
+  }
+  .paperwork-page .paperwork-signatures strong { font-size: 9.5pt !important; }
+  .paperwork-page .paperwork-signatures > div { width: 42% !important; }
+  .paperwork-page .pdf-watermark-logo { width: 48% !important; opacity: .06 !important; }
+  .paperwork-page .pdf-watermark-logo img { width: 100% !important; height: auto !important; }
+  .paperwork-page .print-hide { display: none !important; }
 }
 
 `;
