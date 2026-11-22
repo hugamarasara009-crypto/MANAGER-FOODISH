@@ -412,6 +412,28 @@ function App() {
     return () => clearTimeout(timer);
   }, []);
 
+  // Use the embedded FOODISH logo for browser tab and Android Chrome Add-to-Home-Screen icon.
+  // Capacitor native APK launcher icons are generated from android/app/src/main/res/mipmap-* assets.
+  useEffect(() => {
+    const links = [];
+    const addLink = (rel, attrs = {}) => {
+      let link = document.querySelector(`link[rel="${rel}"]`);
+      if (!link) { link = document.createElement("link"); link.rel = rel; document.head.appendChild(link); }
+      Object.entries(attrs).forEach(([key, value]) => link.setAttribute(key, value));
+      links.push(link);
+    };
+    addLink("icon", { type: "image/png", href: FOODISH_LOGO_DATA_URL });
+    addLink("apple-touch-icon", { href: FOODISH_LOGO_DATA_URL });
+    const manifest = {
+      name: "FOODISH", short_name: "FOODISH", start_url: "/", display: "standalone",
+      background_color: "#ffffff", theme_color: "#059669",
+      icons: [{ src: FOODISH_LOGO_DATA_URL, sizes: "any", type: "image/png", purpose: "any" }]
+    };
+    const manifestUrl = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/manifest+json" }));
+    addLink("manifest", { href: manifestUrl });
+    return () => { URL.revokeObjectURL(manifestUrl); };
+  }, []);
+
   // UNIVERSAL NATIVE + WEB PRINT / SAVE PDF HELPER
   async function handlePrintReport(title = "Foodish Statement") {
     const cleanTitle = String(title)
@@ -1169,9 +1191,11 @@ function App() {
 
     csvContent += `\nAll Total,,${report.totals.online},${report.totals.bill},${report.totals.charge},${report.totals.collect}\n`;
     csvContent += `\nSalary Details\nSL,Person Name,Salary\n`;
-    csvContent += `1,"Rider Salary (Total Charge)",${Number(report.riderSalary ?? report.totals.charge ?? 0)}\n`;
+    (report.rows || []).forEach((rider, index) => {
+      csvContent += `${index + 1},"${String(rider.name || `Rider ${index + 1}`).replace(/"/g, '""')}",${Number(rider.charge || 0)}\n`;
+    });
     (report.salaries || []).forEach((person, index) => {
-      csvContent += `${index + 2},"${String(person.name || "").replace(/"/g, '""')}",${Number(person.amount || 0)}\n`;
+      csvContent += `${(report.rows || []).length + index + 1},"${String(person.name || "").replace(/"/g, '""')}",${Number(person.amount || 0)}\n`;
     });
     csvContent += `Total Salary,,${report.salaryTotal ?? 0}\n`;
     csvContent += `Gross Profit,,${report.grossProfit ?? report.profit}\n`;
@@ -5635,7 +5659,7 @@ function App() {
                   </div>
                 </div>
 
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
+                <div className="paperwork-signatures" style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
                   <div style={{ textAlign: "center", width: "220px" }}>
                     <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
                     <strong style={{ fontSize: "14px", color: "#0f172a" }}>Rider Sign</strong>
@@ -5945,7 +5969,7 @@ function App() {
                 <label style={{ flex: "1 1 160px" }}>Salary (৳)<input type="number" min="0" value={salaryAmountInput} onChange={e => setSalaryAmountInput(e.target.value)} placeholder="Salary amount" /></label>
                 <button type="button" className="primary-btn" onClick={addPaperWorkSalary}>＋ Add Salary</button>
               </div>
-              {<div className="table-wrap" style={{ marginTop: 14 }}><table><thead><tr><th>SL</th><th>Person Name</th><th>Salary</th><th>Action</th></tr></thead><tbody><tr><td>1</td><td><strong>Rider Salary (Total Charge)</strong></td><td>{money(riderSalary)}</td><td>Automatic</td></tr>{paperWorkSalaries.map((item,index)=><tr key={item.id}><td>{index+2}</td><td><strong>{item.name}</strong></td><td>{money(item.amount)}</td><td><button type="button" className="delete-btn" onClick={()=>removePaperWorkSalary(item.id)}>Remove</button></td></tr>)}</tbody><tfoot><tr><th colSpan={2}>TOTAL SALARY</th><th>{money(totalPaperWorkSalary)}</th><th /></tr></tfoot></table></div>}
+              {<div className="table-wrap" style={{ marginTop: 14 }}><table><thead><tr><th>SL</th><th>Person Name</th><th>Salary / Charge</th><th>Type</th></tr></thead><tbody>{paperWorkTableRows.map((rider,index)=><tr key={`rider-salary-${rider.riderId}`}><td>{index+1}</td><td><strong>{rider.name || `Rider ${index+1}`}</strong></td><td>{money(rider.charge || 0)}</td><td>Rider</td></tr>)}{paperWorkSalaries.map((item,index)=><tr key={item.id}><td>{paperWorkTableRows.length+index+1}</td><td><strong>{item.name}</strong></td><td>{money(item.amount)}</td><td>Person</td></tr>)}</tbody><tfoot><tr><th colSpan={2}>TOTAL SALARY</th><th>{money(totalPaperWorkSalary)}</th><th /></tr></tfoot></table></div>}
             </div>
 
             {firestorePaperReports.length > 0 && (
@@ -6074,9 +6098,9 @@ function App() {
               <div className="paperwork-salary-print" style={{ marginTop: 22, position: "relative", zIndex: 1 }}>
                 <h2 style={{ fontSize: 20, margin: "0 0 10px", color: "#0f172a" }}>RIDER & STAFF SALARY DETAILS</h2>
                 <table><thead><tr><th>SL</th><th>Person Name</th><th>Salary Amount</th></tr></thead><tbody>
-                  <tr><td>1</td><td><strong>Rider Salary (Total Charge)</strong></td><td>{money(activePaperworkPrintReport ? (activePaperworkPrintReport.riderSalary ?? activePaperworkPrintReport.totals.charge ?? 0) : riderSalary)}</td></tr>
-                  {(activePaperworkPrintReport ? (activePaperworkPrintReport.salaries || []) : paperWorkSalaries).map((item,index)=><tr key={item.id || `${item.name}-${index}`}><td>{index+2}</td><td><strong>{item.name}</strong></td><td>{money(item.amount)}</td></tr>)}
-                </tbody><tfoot><tr><th colSpan={2}>TOTAL SALARY</th><th>{money(activePaperworkPrintReport ? (activePaperworkPrintReport.salaryTotal ?? ((activePaperworkPrintReport.riderSalary ?? activePaperworkPrintReport.totals.charge ?? 0) + (activePaperworkPrintReport.salaries || []).reduce((sum,item)=>sum+Number(item.amount||0),0))) : totalPaperWorkSalary)}</th></tr></tfoot></table>
+                  {(activePaperworkPrintReport ? activePaperworkPrintReport.rows : paperWorkTableRows).map((rider,index)=><tr key={`print-rider-salary-${rider.riderId || rider.name}-${index}`}><td>{index+1}</td><td><strong>{rider.name || `Rider ${index+1}`}</strong> <span>(Rider)</span></td><td>{money(rider.charge || 0)}</td></tr>)}
+                  {(activePaperworkPrintReport ? (activePaperworkPrintReport.salaries || []) : paperWorkSalaries).map((item,index)=><tr key={item.id || `${item.name}-${index}`}><td>{(activePaperworkPrintReport ? activePaperworkPrintReport.rows.length : paperWorkTableRows.length)+index+1}</td><td><strong>{item.name}</strong> <span>(Person)</span></td><td>{money(item.amount)}</td></tr>)}
+                </tbody><tfoot><tr><th colSpan={2}>TOTAL SALARY</th><th>{money(activePaperworkPrintReport ? (activePaperworkPrintReport.salaryTotal ?? ((activePaperworkPrintReport.rows || []).reduce((sum,row)=>sum+Number(row.charge||0),0) + (activePaperworkPrintReport.salaries || []).reduce((sum,item)=>sum+Number(item.amount||0),0))) : totalPaperWorkSalary)}</th></tr></tfoot></table>
               </div>
 
               <div className="paperwork-profit-summary" style={{ marginTop: "30px", padding: "25px", background: "linear-gradient(135deg, #f0fdf4 0%, #e6f6ef 100%)", border: "2px solid #bbf7d0", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
@@ -7327,6 +7351,41 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
 .global-note-close{width:34px;height:34px;flex:0 0 34px;border:1px solid rgba(255,255,255,.28);border-radius:10px;background:rgba(255,255,255,.13);color:#fff;font-size:23px;line-height:1;cursor:pointer}.global-note-meta{display:flex;justify-content:space-between;gap:8px;padding:11px 16px 7px;color:#64748b;font-size:10px}.global-note-meta span:last-child{text-align:right}.global-note-editor-wrap{position:relative;flex:1;min-height:0;padding:8px 15px 13px}.global-note-editor{width:100%;height:100%;min-height:130px;resize:none;border:1px solid #dce6e2;border-radius:13px;padding:14px;background:#f8fbf9;color:#1e293b;font:13px/1.75 'DM Sans',sans-serif;outline:none;transition:border-color .2s,box-shadow .2s}.global-note-editor:focus{border-color:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,.1)}.global-note-editor::placeholder{color:#94a3b8}.global-note-loading{display:grid;place-items:center;height:100%;color:#64748b;font-size:13px}.global-note-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px 15px;border-top:1px solid #edf2ef;background:#fff}.global-note-user{max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#64748b;font-size:10px}.global-note-actions{display:flex;align-items:center;gap:8px}.global-note-minimize{height:38px;padding:0 12px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;color:#475569;font-size:11px;font-weight:700;cursor:pointer}.global-note-save{height:38px;padding:0 15px;border:0;border-radius:10px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-size:11px;font-weight:800;cursor:pointer;box-shadow:0 4px 10px rgba(5,150,105,.16)}.global-note-save:disabled{opacity:.55;cursor:not-allowed}
 @media(max-width:520px){.global-note-fab{right:16px;bottom:16px;width:56px;height:56px;font-size:24px}.global-note-window{right:10px;bottom:10px;width:calc(100vw - 20px);height:min(520px,calc(100dvh - 20px));border-radius:17px}.global-note-header{padding:14px}.global-note-meta{font-size:9px;padding:10px 13px 6px}.global-note-editor-wrap{padding:7px 12px 11px}.global-note-footer{padding:10px 12px 12px}}
 @media print{.global-note-fab,.global-note-window{display:none!important}}
+
+/* Paper Work: compact responsive A4 layout; keep short reports visually filled. */
+@media print {
+  @page { size: A4 portrait; margin: 5mm; }
+  .paperwork-page .printable-report-area {
+    box-sizing: border-box !important; width: 100% !important; min-height: 185mm !important;
+    display: flex !important; flex-direction: column !important; justify-content: flex-start !important;
+    padding: 2mm !important; margin: 0 !important; overflow: visible !important;
+  }
+  .paperwork-page .print-header { margin: 0 0 2mm !important; }
+  .paperwork-page .print-header h1 { font-size: 12pt !important; line-height: 1.08 !important; margin: 0 0 .8mm !important; }
+  .paperwork-page .print-header p { font-size: 7.5pt !important; line-height: 1.05 !important; }
+  .paperwork-page .print-header img { width: 18px !important; height: 18px !important; }
+  .paperwork-page .table-wrap { overflow: visible !important; margin: 0 !important; }
+  .paperwork-page table { width: 100% !important; border-collapse: collapse !important; table-layout: fixed !important; font-size: 6.7pt !important; }
+  .paperwork-page table th, .paperwork-page table td {
+    font-size: 6.7pt !important; padding: .65mm .7mm !important; line-height: 1.03 !important;
+    white-space: normal !important; overflow-wrap: anywhere !important;
+  }
+  .paperwork-page .paperwork-salary-print { margin-top: 1.5mm !important; break-inside: auto !important; page-break-inside: auto !important; }
+  .paperwork-page .paperwork-salary-print h2 { font-size: 8pt !important; line-height: 1.05 !important; margin: 0 0 .8mm !important; }
+  .paperwork-page .paperwork-profit-summary {
+    margin: 1.5mm 0 0 !important; padding: 1.5mm 2mm !important; border-width: .6px !important;
+    border-radius: 1.5mm !important; break-inside: avoid !important; page-break-inside: avoid !important;
+  }
+  .paperwork-page .paperwork-profit-summary > div:first-child { font-size: 7pt !important; line-height: 1.05 !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(2) { font-size: 14pt !important; line-height: 1.05 !important; margin: .5mm 0 0 !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(3) { font-size: 6.3pt !important; line-height: 1.08 !important; margin-top: .5mm !important; }
+  .paperwork-page .paperwork-signatures { margin-top: auto !important; padding-top: 12mm !important; break-inside: avoid !important; page-break-inside: avoid !important; }
+  .paperwork-page .paperwork-signatures strong { font-size: 7pt !important; }
+  .paperwork-page .pdf-watermark-logo { width: 54% !important; opacity: .09 !important; }
+  .paperwork-page .pdf-watermark-logo img { width: 100% !important; height: auto !important; }
+  .paperwork-page .panel { margin: 0 !important; padding: 0 !important; }
+  .paperwork-page .print-hide { display: none !important; }
+}
 
 `;
 
