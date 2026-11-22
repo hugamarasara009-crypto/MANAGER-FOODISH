@@ -550,7 +550,35 @@ function App() {
   });
   const [salaryNameInput, setSalaryNameInput] = useState("");
   const [salaryAmountInput, setSalaryAmountInput] = useState("");
-  useEffect(() => { try { localStorage.setItem("foodish_paperwork_salaries", JSON.stringify(paperWorkSalaries)); } catch (error) { console.error(error); } }, [paperWorkSalaries]);
+  const [paperWorkRiderSalaryOverrides, setPaperWorkRiderSalaryOverrides] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("foodish_paperwork_rider_salary_overrides") || "{}");
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("foodish_paperwork_salaries", JSON.stringify(paperWorkSalaries)); }
+    catch (error) { console.error(error); }
+  }, [paperWorkSalaries]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("foodish_paperwork_rider_salary_overrides", JSON.stringify(paperWorkRiderSalaryOverrides));
+    } catch (error) {
+      console.error(error);
+    }
+  }, [paperWorkRiderSalaryOverrides]);
+
+  const updatePaperWorkRiderSalary = (riderId, value) => {
+    const amount = Number(value);
+    if (value === "" || !Number.isFinite(amount) || amount < 0) return;
+    setPaperWorkRiderSalaryOverrides(prev => ({ ...prev, [riderId]: amount }));
+  };
+  const updatePaperWorkStaffSalary = (id, value) => {
+    const amount = Number(value);
+    if (value === "" || !Number.isFinite(amount) || amount < 0) return;
+    setPaperWorkSalaries(prev => prev.map(item => item.id === id ? { ...item, amount } : item));
+  };
   const addPaperWorkSalary = () => {
     const name = salaryNameInput.trim(); const amount = Number(salaryAmountInput);
     if (!name || !Number.isFinite(amount) || amount < 0) { setNotice({ type: "error", text: "Person name and valid salary amount দিন।" }); return; }
@@ -1110,10 +1138,13 @@ function App() {
         online: onlineAmount,
         bill: billAmount,
         charge: chargeAmount,
+        salary: Object.prototype.hasOwnProperty.call(paperWorkRiderSalaryOverrides, rId)
+          ? Number(paperWorkRiderSalaryOverrides[rId] || 0)
+          : chargeAmount,
         collect: collectAmount,
       };
     });
-  }, [paperWorkRiderIds, paperWorkDate, orders, riders]);
+  }, [paperWorkRiderIds, paperWorkDate, orders, riders, paperWorkRiderSalaryOverrides]);
 
   const paperWorkTotals = useMemo(() => {
     return paperWorkTableRows.reduce(
@@ -1129,7 +1160,7 @@ function App() {
   }, [paperWorkTableRows]);
 
   const grossProfit = useMemo(() => paperWorkTotals.bill * 0.0941 + paperWorkTotals.charge, [paperWorkTotals]);
-  const riderSalary = Number(paperWorkTotals.charge || 0);
+  const riderSalary = paperWorkTableRows.reduce((sum, row) => sum + Number(row.salary ?? row.charge ?? 0), 0);
   const staffSalaryTotal = paperWorkSalaries.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const totalPaperWorkSalary = riderSalary + staffSalaryTotal;
   const calculatedProfit = grossProfit - totalPaperWorkSalary;
@@ -1144,6 +1175,7 @@ function App() {
         totals: { ...paperWorkTotals },
         salaries: JSON.parse(JSON.stringify(paperWorkSalaries)),
         riderSalary: riderSalary,
+        riderSalaryOverrides: { ...paperWorkRiderSalaryOverrides },
         salaryTotal: totalPaperWorkSalary,
         grossProfit,
         profit: calculatedProfit,
@@ -1192,7 +1224,7 @@ function App() {
     csvContent += `\nAll Total,,${report.totals.online},${report.totals.bill},${report.totals.charge},${report.totals.collect}\n`;
     csvContent += `\nSalary Details\nSL,Person Name,Salary\n`;
     (report.rows || []).forEach((rider, index) => {
-      csvContent += `${index + 1},"${String(rider.name || `Rider ${index + 1}`).replace(/"/g, '""')}",${Number(rider.charge || 0)}\n`;
+      csvContent += `${index + 1},"${String(rider.name || `Rider ${index + 1}`).replace(/"/g, '""')}",${Number(rider.salary ?? rider.charge ?? 0)}\n`;
     });
     (report.salaries || []).forEach((person, index) => {
       csvContent += `${(report.rows || []).length + index + 1},"${String(person.name || "").replace(/"/g, '""')}",${Number(person.amount || 0)}\n`;
@@ -5960,7 +5992,62 @@ function App() {
                 <label style={{ flex: "1 1 160px" }}>Salary (৳)<input type="number" min="0" value={salaryAmountInput} onChange={e => setSalaryAmountInput(e.target.value)} placeholder="Salary amount" /></label>
                 <button type="button" className="primary-btn" onClick={addPaperWorkSalary}>＋ Add Salary</button>
               </div>
-              {<div className="table-wrap" style={{ marginTop: 14 }}><table><thead><tr><th>SL</th><th>Person Name</th><th>Salary / Charge</th><th>Type</th></tr></thead><tbody>{paperWorkTableRows.map((rider,index)=><tr key={`rider-salary-${rider.riderId}`}><td>{index+1}</td><td><strong>{rider.name || `Rider ${index+1}`}</strong></td><td>{money(rider.charge || 0)}</td><td>Rider</td></tr>)}{paperWorkSalaries.map((item,index)=><tr key={item.id}><td>{paperWorkTableRows.length+index+1}</td><td><strong>{item.name}</strong></td><td>{money(item.amount)}</td><td>Person</td></tr>)}</tbody><tfoot><tr><th colSpan={2}>TOTAL SALARY</th><th>{money(totalPaperWorkSalary)}</th><th /></tr></tfoot></table></div>}
+              <div className="table-wrap" style={{ marginTop: 14 }}>
+                <table>
+                  <thead><tr><th>SL</th><th>Person Name</th><th>Salary Amount (৳) — Edit</th><th>Type</th><th>Action</th></tr></thead>
+                  <tbody>
+                    {paperWorkTableRows.map((rider, index) => (
+                      <tr key={`rider-salary-${rider.riderId}`}>
+                        <td>{index + 1}</td>
+                        <td><strong>{rider.name || `Rider ${index + 1}`}</strong></td>
+                        <td>
+                          <input
+                            aria-label={`${rider.name} salary`}
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={rider.salary ?? rider.charge ?? 0}
+                            onChange={e => updatePaperWorkRiderSalary(rider.riderId, e.target.value)}
+                            style={{ width: 130, minWidth: 100, padding: "8px", fontWeight: 800 }}
+                          />
+                        </td>
+                        <td>Rider</td>
+                        <td><span className="cell-sub">Auto: {money(rider.charge || 0)}</span></td>
+                      </tr>
+                    ))}
+                    {paperWorkSalaries.map((item, index) => (
+                      <tr key={item.id}>
+                        <td>{paperWorkTableRows.length + index + 1}</td>
+                        <td><strong>{item.name}</strong></td>
+                        <td>
+                          <input
+                            aria-label={`${item.name} salary`}
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.amount}
+                            onChange={e => updatePaperWorkStaffSalary(item.id, e.target.value)}
+                            style={{ width: 130, minWidth: 100, padding: "8px", fontWeight: 800 }}
+                          />
+                        </td>
+                        <td>Person</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="delete-btn"
+                            onClick={() => removePaperWorkSalary(item.id)}
+                            style={{ padding: "7px 10px", whiteSpace: "nowrap" }}
+                          >🗑️ Remove</button>
+                        </td>
+                      </tr>
+                    ))}
+                    {paperWorkTableRows.length === 0 && paperWorkSalaries.length === 0 && (
+                      <tr><td colSpan={5} className="empty-cell">No rider or staff salary added yet.</td></tr>
+                    )}
+                  </tbody>
+                  <tfoot><tr><th colSpan={2}>TOTAL SALARY</th><th>{money(totalPaperWorkSalary)}</th><th colSpan={2} /></tr></tfoot>
+                </table>
+              </div>
             </div>
 
             {firestorePaperReports.length > 0 && (
@@ -6089,7 +6176,7 @@ function App() {
               <div className="paperwork-salary-print" style={{ marginTop: 22, position: "relative", zIndex: 1 }}>
                 <h2 style={{ fontSize: 20, margin: "0 0 10px", color: "#0f172a" }}>RIDER & STAFF SALARY DETAILS</h2>
                 <table><thead><tr><th>SL</th><th>Person Name</th><th>Salary Amount</th></tr></thead><tbody>
-                  {(activePaperworkPrintReport ? activePaperworkPrintReport.rows : paperWorkTableRows).map((rider,index)=><tr key={`print-rider-salary-${rider.riderId || rider.name}-${index}`}><td>{index+1}</td><td><strong>{rider.name || `Rider ${index+1}`}</strong> <span>(Rider)</span></td><td>{money(rider.charge || 0)}</td></tr>)}
+                  {(activePaperworkPrintReport ? activePaperworkPrintReport.rows : paperWorkTableRows).map((rider,index)=><tr key={`print-rider-salary-${rider.riderId || rider.name}-${index}`}><td>{index+1}</td><td><strong>{rider.name || `Rider ${index+1}`}</strong> <span>(Rider)</span></td><td>{money(rider.salary ?? rider.charge ?? 0)}</td></tr>)}
                   {(activePaperworkPrintReport ? (activePaperworkPrintReport.salaries || []) : paperWorkSalaries).map((item,index)=><tr key={item.id || `${item.name}-${index}`}><td>{(activePaperworkPrintReport ? activePaperworkPrintReport.rows.length : paperWorkTableRows.length)+index+1}</td><td><strong>{item.name}</strong> <span>(Person)</span></td><td>{money(item.amount)}</td></tr>)}
                 </tbody><tfoot><tr><th colSpan={2}>TOTAL SALARY</th><th>{money(activePaperworkPrintReport ? (activePaperworkPrintReport.salaryTotal ?? ((activePaperworkPrintReport.rows || []).reduce((sum,row)=>sum+Number(row.charge||0),0) + (activePaperworkPrintReport.salaries || []).reduce((sum,item)=>sum+Number(item.amount||0),0))) : totalPaperWorkSalary)}</th></tr></tfoot></table>
               </div>
@@ -7569,6 +7656,31 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   .online-payment-page .online-transaction-total { font-size: 8pt !important; padding: 1.5mm 2mm !important; margin-top: 1.5mm !important; }
 }
 
+
+/* Paper Work print typography enlarged to approximately 2x for readability. */
+@media print {
+  .paperwork-page .printable-report-area { padding: 4mm 5mm !important; }
+  .paperwork-page .print-header { margin-bottom: 6mm !important; }
+  .paperwork-page .print-header h1 { font-size: 32pt !important; line-height: 1.2 !important; }
+  .paperwork-page .print-header p { font-size: 18pt !important; }
+  .paperwork-page .print-header img { width: 58px !important; height: 58px !important; }
+  .paperwork-page .print-header span { font-size: 40pt !important; }
+  .paperwork-page table { font-size: 16pt !important; }
+  .paperwork-page table th,
+  .paperwork-page table td {
+    font-size: 16pt !important;
+    padding: 2.8mm 2.3mm !important;
+    line-height: 1.25 !important;
+  }
+  .paperwork-page .paperwork-salary-print { margin-top: 6mm !important; }
+  .paperwork-page .paperwork-salary-print h2 { font-size: 20pt !important; }
+  .paperwork-page .paperwork-profit-summary { margin-top: 8mm !important; padding: 8mm !important; }
+  .paperwork-page .paperwork-profit-summary > div:first-child { font-size: 18pt !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(2) { font-size: 42pt !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(3) { font-size: 16pt !important; }
+  .paperwork-page .paperwork-signatures { padding-top: 25mm !important; }
+  .paperwork-page .paperwork-signatures strong { font-size: 18pt !important; }
+}
 
 `;
 
