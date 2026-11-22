@@ -96,12 +96,46 @@ const isDelivered = (order) =>
 const isCancelled = (order) =>
   ["cancelled", "canceled", "rejected"].includes(normalized(order.orderStatus));
 
-const isCOD = (order) => {
-  const payment = normalized(order.payment || order.paymentMethod || order.paymentType || order.payment_type || order.method || order.payMethod);
-  return payment === "cash" || payment.includes("cod") || payment.includes("cash on delivery");
+const getPaymentMethod = (order = {}) => {
+  const candidates = [
+    order.paymentProvider, order.payment_provider, order.paymentDetails?.provider,
+    order.paymentInfo?.provider, order.transaction?.provider,
+    order.payment, order.paymentMethod, order.paymentType, order.payment_method,
+    order.payment_method_name, order.paymentMethodName, order.paymentMode, order.payment_mode,
+    order.paymentDetails?.method, order.paymentDetails?.paymentMethod,
+    order.paymentInfo?.method, order.transaction?.method,
+  ];
+  const values = candidates.map((value) => {
+    if (typeof value === "string") return value.trim();
+    if (value && typeof value === "object") {
+      const nested = value.method || value.name || value.type || value.provider || value.paymentMethod;
+      return typeof nested === "string" ? nested.trim() : "";
+    }
+    return "";
+  }).filter(Boolean);
+  const specific = values.find((value) => /bkash|b-kash|nagad|rocket|cod|cash|pay on delivery/i.test(value));
+  return specific || values[0] || "";
 };
 
-const orderAmount = (order) => Number(order.totalPrice ?? order.amount ?? order.grandTotal ?? order.total ?? order.payableAmount ?? 0) || 0;
+const isCOD = (order) => {
+  const payment = normalized(getPaymentMethod(order));
+  return payment === "cod" || payment.includes("cash on delivery") ||
+    payment.includes("cash delivery") || payment === "cash" || payment.includes("pay on delivery");
+};
+
+const orderAmount = (order = {}) => {
+  const candidates = [
+    order.totalPrice, order.grandTotal, order.totalAmount, order.total_amount,
+    order.payableAmount, order.finalAmount, order.orderTotal, order.paymentAmount,
+    order.amountPaid, order.amount, order.total, order.price,
+    order.priceDetails?.total, order.bill?.total, order.paymentDetails?.amount,
+  ];
+  for (const value of candidates) {
+    const amount = typeof value === "number" ? value : Number(String(value ?? "").replace(/[^0-9.-]/g, ""));
+    if (Number.isFinite(amount) && amount > 0) return amount;
+  }
+  return 0;
+};
 
 const itemSubtotal = (items = [], restaurantName = "", restaurantId = "") => {
   if (!Array.isArray(items)) return 0;
@@ -487,12 +521,6 @@ function App() {
   });
 
   const [paperWorkDate, setPaperWorkDate] = useState(todayKey());
-  const [extraPaperWorkMembers, setExtraPaperWorkMembers] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("foodish_paperwork_extra_members") || "[]"); }
-    catch { return []; }
-  });
-  const [extraPaperWorkName, setExtraPaperWorkName] = useState("");
-  const [extraPaperWorkSalary, setExtraPaperWorkSalary] = useState("");
   const [historyStart, setHistoryStart] = useState(todayKey());
   const [historyEnd, setHistoryEnd] = useState(todayKey());
   const [historyType, setHistoryType] = useState("restaurant");
@@ -512,12 +540,6 @@ function App() {
       console.error(e);
     }
   }, [paperWorkRiderIds]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("foodish_paperwork_extra_members", JSON.stringify(extraPaperWorkMembers));
-    } catch (e) { console.error(e); }
-  }, [extraPaperWorkMembers]);
 
   // Background Auth & Firestore Sync starts immediately on mount
   useEffect(() => {
@@ -1069,31 +1091,9 @@ function App() {
     );
   }, [paperWorkTableRows]);
 
-  const riderSalaryTotal = paperWorkTotals.charge; // Each selected rider salary is their earned delivery charge.
-  const extraMemberSalaryTotal = extraPaperWorkMembers.reduce((sum, member) => sum + Number(member.salary || 0), 0);
-  const totalSalary = riderSalaryTotal + extraMemberSalaryTotal;
-  const paperWorkSalaryPeople = [
-    ...paperWorkTableRows.map((row) => ({ id: `rider-${row.riderId}`, name: row.name, salary: Number(row.charge || 0) })),
-    ...extraPaperWorkMembers.map((member) => ({ id: `extra-${member.id}`, name: `${member.name} (Extra)`, salary: Number(member.salary || 0) })),
-  ];
-  const savedPaperWorkSalaryPeople = activePaperworkPrintReport ? [
-    ...(activePaperworkPrintReport.rows || []).map((row) => ({ id: `rider-${row.riderId}`, name: row.name, salary: Number(row.charge || 0) })),
-    ...(activePaperworkPrintReport.extraMembers || []).map((member) => ({ id: `extra-${member.id}`, name: `${member.name} (Extra)`, salary: Number(member.salary || 0) })),
-  ] : paperWorkSalaryPeople;
-  const grossProfitBeforeSalary = paperWorkTotals.bill * 0.0941 + paperWorkTotals.charge;
-  const calculatedProfit = grossProfitBeforeSalary - totalSalary;
-
-  function addExtraPaperWorkMember() {
-    const name = extraPaperWorkName.trim();
-    const salary = Number(extraPaperWorkSalary);
-    if (!name || !Number.isFinite(salary) || salary < 0) {
-      setNotice({ type: "error", text: "Enter extra member name and a valid salary amount." });
-      return;
-    }
-    setExtraPaperWorkMembers((prev) => [...prev, { id: `extra-${Date.now()}`, name, salary }]);
-    setExtraPaperWorkName("");
-    setExtraPaperWorkSalary("");
-  }
+  const calculatedProfit = useMemo(() => {
+    return paperWorkTotals.bill * 0.0941 + paperWorkTotals.charge;
+  }, [paperWorkTotals]);
 
   async function saveCurrentPaperWorkReport() {
     setSaving(true);
@@ -1102,9 +1102,7 @@ function App() {
         date: paperWorkDate,
         savedAt: new Date().toISOString(),
         rows: JSON.parse(JSON.stringify(paperWorkTableRows)),
-        totals: { ...paperWorkTotals, riderSalary: riderSalaryTotal, extraSalary: extraMemberSalaryTotal, totalSalary },
-        extraMembers: extraPaperWorkMembers.map((member) => ({ ...member })),
-        grossProfitBeforeSalary,
+        totals: { ...paperWorkTotals },
         profit: calculatedProfit,
       };
 
@@ -1762,14 +1760,11 @@ function App() {
     return orders
       .filter((order) => {
         const matchesDate = dateKey(order.createdAt) === onlinePayDate;
-        const rawMethod = order.payment || order.paymentMethod || order.paymentType || order.payment_type || order.method || order.payMethod || "";
-        const methodText = normalized(rawMethod);
-        const isOnlineMethod = methodText.includes("bkash") || methodText.includes("nagad") || methodText.includes("rocket") || methodText.includes("online") || methodText.includes("card") || methodText.includes("wallet");
-        const notCOD = !isCOD(order) && (isOnlineMethod || Boolean(methodText));
+        const notCOD = !isCOD(order);
         if (!matchesDate || !notCOD) return false;
 
         if (onlinePayMethodFilter !== "all") {
-          const payMethod = normalized(order.payment || order.paymentMethod || order.paymentType || order.payment_type || order.method || order.payMethod);
+          const payMethod = normalized(getPaymentMethod(order));
           if (!payMethod.includes(normalized(onlinePayMethodFilter))) return false;
         }
 
@@ -1792,8 +1787,8 @@ function App() {
     let otherSum = 0;
 
     onlinePaymentOrders.forEach((o) => {
-      const method = normalized(o.payment || o.paymentMethod || o.paymentType || o.payment_type || o.method || o.payMethod);
-      const amt = Number(o.totalPrice ?? o.amount ?? o.grandTotal ?? o.total ?? o.payableAmount ?? 0) || 0;
+      const method = normalized(getPaymentMethod(o));
+      const amt = orderAmount(o);
       if (method.includes("bkash")) bkashSum += amt;
       else if (method.includes("nagad")) nagadSum += amt;
       else if (method.includes("rocket")) rocketSum += amt;
@@ -3064,7 +3059,7 @@ function App() {
             </div>
 
             <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
-              <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
+              <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.09, pointerEvents: "none", zIndex: 0 }}>
                 <FoodishLogo size={360} />
               </div>
 
@@ -3094,7 +3089,7 @@ function App() {
                     </thead>
                     <tbody>
                       {onlinePaymentOrders.map((order) => {
-                        const paymentMethodName = order.payment || order.paymentMethod || order.paymentType || order.payment_type || order.method || order.payMethod || "Online";
+                        const paymentMethodName = getPaymentMethod(order) || "Online";
                         const norm = normalized(paymentMethodName);
                         const isBk = norm.includes("bkash");
                         const isNag = norm.includes("nagad");
@@ -3121,7 +3116,7 @@ function App() {
                                   {paymentMethodName}
                                 </span>
                                 <strong style={{ color: "#047857", fontSize: "14px" }}>
-                                  {money(Number(order.totalPrice ?? order.amount ?? order.grandTotal ?? order.total ?? order.payableAmount ?? 0) || 0)}
+                                  {money(orderAmount(order))}
                                 </strong>
                               </div>
                             </td>
@@ -5455,7 +5450,7 @@ function App() {
 
             {historyType === "restaurant" && (
               <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
-                <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
+                <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.09, pointerEvents: "none", zIndex: 0 }}>
                   <FoodishLogo size={360} />
                 </div>
 
@@ -5542,7 +5537,7 @@ function App() {
 
             {historyType === "rider" && (
               <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
-                <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
+                <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.09, pointerEvents: "none", zIndex: 0 }}>
                   <FoodishLogo size={360} />
                 </div>
 
@@ -5865,7 +5860,7 @@ function App() {
 
         {/* 7. PAPER WORK & REPORTS */}
         {page === "paperwork" && (
-          <section key="page-paperwork" className="content page-animate">
+          <section key="page-paperwork" className="content page-animate paperwork-page">
             <div className="section-heading print-hide">
               <div>
                 <h2>Paper Work & Profit Calculation</h2>
@@ -5915,18 +5910,6 @@ function App() {
               </div>
             </div>
 
-            <div className="panel print-hide paperwork-extra-members-panel">
-              <div className="panel-head">
-                <div><h3>Extra Members & Salary</h3><p>Add staff members who are not riders and enter their salary for this statement.</p></div>
-              </div>
-              <div className="filter-bar" style={{ alignItems: "end" }}>
-                <label style={{ flex: 2 }}>Member Name<input value={extraPaperWorkName} onChange={(e) => setExtraPaperWorkName(e.target.value)} placeholder="Enter member name" /></label>
-                <label>Salary (৳)<input type="number" min="0" value={extraPaperWorkSalary} onChange={(e) => setExtraPaperWorkSalary(e.target.value)} placeholder="0" /></label>
-                <button type="button" className="primary-btn" onClick={addExtraPaperWorkMember}>+ Add Member</button>
-              </div>
-              {extraPaperWorkMembers.length > 0 && <div className="table-wrap"><table><thead><tr><th>Extra Member</th><th className="right">Salary</th><th className="right">Action</th></tr></thead><tbody>{extraPaperWorkMembers.map((member) => <tr key={member.id}><td>{member.name}</td><td className="right">{money(member.salary)}</td><td className="right"><button type="button" className="delete-btn" onClick={() => setExtraPaperWorkMembers((prev) => prev.filter((m) => m.id !== member.id))}>Remove</button></td></tr>)}</tbody><tfoot><tr><th>Total Extra Salary</th><th className="right">{money(extraMemberSalaryTotal)}</th><th /></tr></tfoot></table></div>}
-            </div>
-
             {firestorePaperReports.length > 0 && (
               <div className="panel print-hide">
                 <div className="panel-head">
@@ -5971,7 +5954,7 @@ function App() {
             )}
 
             <div className="printable-report-area history-print-box" style={{ background: "#fff", padding: "30px", borderRadius: "14px", border: "1px solid #e2e8f0", position: "relative" }}>
-              <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.05, pointerEvents: "none", zIndex: 0 }}>
+              <div className="pdf-watermark-logo" style={{ display: "none", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", opacity: 0.09, pointerEvents: "none", zIndex: 0 }}>
                 <FoodishLogo size={360} />
               </div>
 
@@ -5988,7 +5971,7 @@ function App() {
                 </p>
               </div>
 
-              <div className="panel" style={{ border: 0, padding: 0, boxShadow: "none", position: "relative", zIndex: 1, background: "rgba(255,255,255,0.96)" }}>
+              <div className="panel" style={{ border: 0, padding: 0, boxShadow: "none", position: "relative", zIndex: 1, background: "transparent" }}>
                 <div className="panel-head print-hide">
                   <div>
                     <h3>Performance & Ledger Table {activePaperworkPrintReport ? `(Viewing Saved Report: ${activePaperworkPrintReport.date})` : ""}</h3>
@@ -6050,20 +6033,13 @@ function App() {
                 </div>
               </div>
 
-              <div className="paperwork-salary-summary" style={{ marginTop: "12px", border: "1px solid #d1d5db", borderRadius: "8px", padding: "10px", position: "relative", zIndex: 1 }}>
-                <h3 style={{ margin: "0 0 8px", fontSize: "14px" }}>Salary Details</h3>
-                <table><thead><tr><th>Member</th><th>Salary</th><th>Member</th><th>Salary</th></tr></thead><tbody>
-                  {savedPaperWorkSalaryPeople.map((person, index) => index % 2 === 0 ? <tr key={person.id}><td>{person.name}</td><td>{money(person.salary)}</td><td>{savedPaperWorkSalaryPeople[index + 1]?.name || ""}</td><td>{savedPaperWorkSalaryPeople[index + 1] ? money(savedPaperWorkSalaryPeople[index + 1].salary) : ""}</td></tr> : null)}
-                </tbody><tfoot><tr><th colSpan={3}>Total Salary Deducted</th><th>{money(activePaperworkPrintReport ? (activePaperworkPrintReport.totals?.totalSalary ?? ((activePaperworkPrintReport.totals?.riderSalary || (activePaperworkPrintReport.rows || []).reduce((sum, row) => sum + Number(row.charge || 0), 0)) + (activePaperworkPrintReport.totals?.extraSalary || (activePaperworkPrintReport.extraMembers || []).reduce((sum, member) => sum + Number(member.salary || 0), 0)))) : totalSalary)}</th></tr></tfoot></table>
-              </div>
-
               <div className="paperwork-profit-summary" style={{ marginTop: "30px", padding: "25px", background: "linear-gradient(135deg, #f0fdf4 0%, #e6f6ef 100%)", border: "2px solid #bbf7d0", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
-                <div style={{ fontSize: "14px", fontWeight: "800", color: "#15803d", letterSpacing: "1px" }}>NET PROFIT AFTER SALARY</div>
-                <div style={{ fontSize: "32px", fontWeight: "900", color: "#14532d", margin: "4px 0 0" }}>
+                <div style={{ fontSize: "14px", fontWeight: "800", color: "#15803d", letterSpacing: "1px" }}>PROFIT SUMMARY</div>
+                <div style={{ fontSize: "40px", fontWeight: "900", color: "#14532d", margin: "6px 0 0" }}>
                   {money(activePaperworkPrintReport ? activePaperworkPrintReport.profit : calculatedProfit)}
                 </div>
-                <div style={{ fontSize: "10px", fontWeight: "700", color: "#334155", marginTop: "3px" }}>
-                  Gross Profit {money(activePaperworkPrintReport ? (activePaperworkPrintReport.grossProfitBeforeSalary ?? activePaperworkPrintReport.profit) : grossProfitBeforeSalary)} − Salary {money(activePaperworkPrintReport ? (activePaperworkPrintReport.totals?.totalSalary ?? 0) : totalSalary)} = Net Profit
+                <div style={{ fontSize: "12px", fontWeight: "700", color: "#334155", marginTop: "4px" }}>
+                  Formula: (Total Bill × 9.41%) + Total Charge
                 </div>
               </div>
 
@@ -7216,172 +7192,56 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
 }
 
 @media print {
-  @page {
-    size: A4 portrait;
-    margin: 5mm;
-  }
-  @page onlineHistory {
-    size: A4 landscape;
-    margin: 5mm;
-  }
-  *, *::before, *::after {
-    animation: none !important;
-    transition: none !important;
-  }
-  body {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  .print-hide, .sidebar, .topbar, .footer {
-    display: none !important;
-  }
-  .app-shell, .main-area {
-    margin: 0 !important;
-    width: 100% !important;
-    background: #fff !important;
-  }
-  .content {
-    padding: 0 !important;
-    max-width: 100% !important;
-  }
-  .panel {
-    border: none !important;
-    box-shadow: none !important;
-    padding: 0 !important;
-    margin-bottom: 10px !important;
-    background: transparent !important;
-  }
-  .printable-report-area, .history-print-box {
-    width: 100% !important;
-    max-width: 100% !important;
-    padding: 5px !important;
-    margin: 0 !important;
-    border: none !important;
-    position: relative !important;
-    background: #fff !important;
-  }
-  .pdf-watermark-logo {
-    display: block !important;
-  }
-  table {
-    width: 100% !important;
-    table-layout: auto !important;
-    border-collapse: collapse !important;
-    overflow: visible !important;
-    font-size: 10px !important;
-  }
-  table th, table td {
-    font-size: 10px !important;
-    padding: 4px 6px !important;
-    white-space: nowrap !important;
-  }
-  .printable-report-area table td:nth-child(4) {
-    white-space: normal !important;
-  }
-  tr {
-    page-break-inside: avoid !important;
-  }
-  /* Online payment history: compact A4 print layout, usually 1–2 pages. */
-  .online-payment-page {
-    page: onlineHistory;
-  }
-  .online-payment-page .printable-report-area {
-    padding: 2mm !important;
-    border: 0 !important;
-    border-radius: 0 !important;
-  }
-  .online-payment-page .online-payment-print-header {
-    margin-bottom: 4mm !important;
-  }
-  .online-payment-page .online-payment-print-header h1 {
-    font-size: 15pt !important;
-    margin: 0 0 2mm !important;
-  }
-  .online-payment-page .online-payment-print-header p {
-    font-size: 9pt !important;
-  }
-  .online-payment-page .online-payment-print-header svg {
-    width: 22px !important;
-    height: 22px !important;
-  }
-  .online-payment-page .online-payment-print-header span {
-    font-size: 17pt !important;
-    letter-spacing: 1px !important;
-  }
-  .online-payment-page .table-wrap {
-    overflow: visible !important;
-    border: 0 !important;
-  }
-  .online-payment-page table {
-    font-size: 8pt !important;
-    table-layout: fixed !important;
-  }
-  .online-payment-page table tbody tr { border-bottom: 0.25mm solid #cbd5e1 !important; }
-  .online-payment-page table th,
-  .online-payment-page table td {
-    font-size: 8pt !important;
-    padding: 2mm 1.5mm !important;
-    white-space: normal !important;
-    overflow-wrap: anywhere !important;
-  }
-  .online-payment-page table th:nth-child(1),
-  .online-payment-page table td:nth-child(1) { width: 22% !important; }
-  .online-payment-page table th:nth-child(2),
-  .online-payment-page table td:nth-child(2) { width: 15% !important; }
-  .online-payment-page table th:nth-child(3),
-  .online-payment-page table td:nth-child(3) { width: 38% !important; }
-  .online-payment-page table th:nth-child(4),
-  .online-payment-page table td:nth-child(4) { width: 25% !important; }
-  .online-payment-page .status {
-    font-size: 7pt !important;
-    padding: 1mm 2mm !important;
-  }
-  .online-payment-page .print-hide,
-  .online-payment-page .section-heading,
-  .online-payment-page .stats-grid {
-    display: none !important;
-  }
-  .online-payment-page .panel {
-    margin: 0 !important;
-  }
-  .online-payment-page .printable-report-area {
-    page-break-before: avoid !important;
-    page-break-after: auto !important;
-  }
-  #root .content:has(.paperwork-profit-summary) .printable-report-area {
-    padding: 2mm !important;
-  }
-  @page paperworkSheet { size: A4 landscape; margin: 4mm; }
-  #root .content:has(.paperwork-salary-summary) { page: paperworkSheet; }
-  #root .content:has(.paperwork-salary-summary) .print-header { margin-bottom: 3mm !important; }
-  #root .content:has(.paperwork-salary-summary) .print-header h1 { font-size: 16pt !important; }
-  #root .content:has(.paperwork-salary-summary) .print-header p { font-size: 9pt !important; }
-  #root .content:has(.paperwork-salary-summary) .printable-report-area { padding: 0 !important; }
-  #root .content:has(.paperwork-salary-summary) .table-wrap { overflow: visible !important; }
-  #root .content:has(.paperwork-salary-summary) table { font-size: 7.5pt !important; }
-  #root .content:has(.paperwork-salary-summary) table th,
-  #root .content:has(.paperwork-salary-summary) table td { font-size: 7.5pt !important; padding: 1mm 1.5mm !important; white-space: normal !important; }
-  .paperwork-salary-summary { margin-top: 2mm !important; padding: 2mm !important; }
-  .paperwork-salary-summary h3 { margin-bottom: 1mm !important; }
-  .paperwork-salary-summary table th,
-  .paperwork-salary-summary table td { padding: 0.8mm 1.5mm !important; }
-  #root .content:has(.paperwork-salary-summary) .paperwork-profit-summary { margin-top: 2mm !important; padding: 2mm !important; }
-  #root .content:has(.paperwork-salary-summary) .paperwork-profit-summary > div:nth-child(2) { font-size: 18pt !important; }
-  #root .content:has(.paperwork-salary-summary) .paperwork-profit-summary + div { margin-top: 4mm !important; padding-top: 2mm !important; }
-  #root .content:has(.paperwork-salary-summary) .paperwork-profit-summary + div > div { width: 35% !important; }
-  .paperwork-profit-summary {
-    margin-top: 5mm !important;
-    padding: 4mm !important;
-    break-inside: avoid !important;
-  }
-  .paperwork-profit-summary > div:nth-child(2) {
-    font-size: 22pt !important;
-  }
-  .paperwork-signatures {
-    margin-top: 12mm !important;
-    padding-top: 4mm !important;
-    break-inside: avoid !important;
-  }
+  @page { size: A4 portrait; margin: 5mm; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  html, body, #root { width: 100% !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
+  body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; background: #fff !important; }
+  .print-hide, .sidebar, .topbar, .footer, .global-note-fab, .global-note-window { display: none !important; }
+  .app-shell, .main-area { display: block !important; margin: 0 !important; width: 100% !important; max-width: 100% !important; height: auto !important; min-height: 0 !important; overflow: visible !important; background: #fff !important; }
+  .content { display: block !important; padding: 0 !important; margin: 0 !important; width: 100% !important; max-width: 100% !important; height: auto !important; min-height: 0 !important; overflow: visible !important; }
+  .panel { border: none !important; box-shadow: none !important; padding: 0 !important; margin: 0 0 2mm !important; background: transparent !important; }
+  .printable-report-area, .history-print-box { width: 100% !important; max-width: 100% !important; height: auto !important; min-height: 0 !important; padding: 2mm !important; margin: 0 !important; border: none !important; border-radius: 0 !important; position: relative !important; overflow: visible !important; background: transparent !important; box-sizing: border-box !important; page-break-before: avoid !important; page-break-after: auto !important; }
+  .pdf-watermark-logo { display: block !important; position: absolute !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) !important; width: 55% !important; height: auto !important; opacity: .075 !important; pointer-events: none !important; z-index: 0 !important; }
+  .pdf-watermark-logo img { width: 100% !important; height: auto !important; max-width: 100% !important; }
+  .print-header, .online-payment-print-header { position: relative !important; z-index: 2 !important; margin: 0 0 3mm !important; }
+  .print-header h1, .online-payment-print-header h1 { font-size: 14pt !important; margin: 0 0 1mm !important; }
+  .print-header p, .online-payment-print-header p { font-size: 8pt !important; margin: 0 !important; }
+  .print-header img, .online-payment-print-header img { width: 22px !important; height: 22px !important; }
+  table { width: 100% !important; table-layout: fixed !important; border-collapse: collapse !important; overflow: visible !important; font-size: 7.2pt !important; position: relative !important; z-index: 2 !important; }
+  table th, table td { font-size: 7.2pt !important; padding: 1.2mm 1mm !important; white-space: normal !important; overflow-wrap: anywhere !important; line-height: 1.2 !important; }
+  tr, th, td { break-inside: avoid !important; page-break-inside: avoid !important; }
+  .table-wrap { overflow: visible !important; border: 0 !important; }
+  .paperwork-page .printable-report-area { padding: 1mm !important; }
+  .paperwork-page .print-header { margin-bottom: 2mm !important; }
+  .paperwork-page .print-header h1 { font-size: 12pt !important; }
+  .paperwork-page .paperwork-profit-summary { margin: 2mm 0 0 !important; padding: 2mm !important; border-width: 1px !important; border-radius: 3mm !important; break-inside: avoid !important; page-break-inside: avoid !important; }
+  .paperwork-page .paperwork-profit-summary > div:first-child { font-size: 8pt !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(2) { font-size: 18pt !important; margin: 1mm 0 0 !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(3) { font-size: 7pt !important; margin-top: 1mm !important; }
+  .paperwork-page .paperwork-signatures { margin-top: 6mm !important; padding-top: 2mm !important; break-inside: avoid !important; page-break-inside: avoid !important; }
+  .paperwork-page .paperwork-signatures strong { font-size: 8pt !important; }
+  .paperwork-page .paperwork-signatures > div { width: 42% !important; }
+  /* Portrait online payment summary: keep all four collection boxes visible. */
+  .online-payment-page .stats-grid { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 2mm !important; margin: 0 0 3mm !important; }
+  .online-payment-page .stats-grid .stat-card { min-height: 0 !important; padding: 2mm 3mm !important; border-radius: 2mm !important; box-shadow: none !important; break-inside: avoid !important; page-break-inside: avoid !important; }
+  .online-payment-page .stats-grid .stat-label { font-size: 7pt !important; }
+  .online-payment-page .stats-grid .stat-value { font-size: 11pt !important; line-height: 1.2 !important; }
+  .online-payment-page .stats-grid .stat-hint { font-size: 6pt !important; }
+  .online-payment-page .stats-grid .stat-icon { width: 6mm !important; height: 6mm !important; font-size: 8pt !important; }
+  .online-payment-page .online-payment-print-header { margin-bottom: 2mm !important; }
+  .online-payment-page .online-payment-print-header h1 { font-size: 12pt !important; }
+  .online-payment-page .online-payment-print-header span { font-size: 15pt !important; letter-spacing: 1px !important; }
+  .online-payment-page .table-wrap { overflow: visible !important; border: 0 !important; }
+  .online-payment-page table { font-size: 7pt !important; }
+  .online-payment-page table th, .online-payment-page table td { font-size: 7pt !important; padding: 1mm !important; white-space: normal !important; overflow-wrap: anywhere !important; }
+  .online-payment-page table th:nth-child(1), .online-payment-page table td:nth-child(1) { width: 18% !important; }
+  .online-payment-page table th:nth-child(2), .online-payment-page table td:nth-child(2) { width: 18% !important; }
+  .online-payment-page table th:nth-child(3), .online-payment-page table td:nth-child(3) { width: 38% !important; }
+  .online-payment-page table th:nth-child(4), .online-payment-page table td:nth-child(4) { width: 26% !important; }
+  .online-payment-page .status { font-size: 6pt !important; padding: .5mm 1mm !important; }
+  .online-payment-page .print-hide, .online-payment-page .section-heading { display: none !important; }
+  .online-payment-page .panel { margin: 0 !important; }
+  .online-payment-page .printable-report-area { page-break-before: avoid !important; }
 }
 @media(max-width:520px){.login-page{padding:22px 14px 58px}.login-card{padding:37px 24px 29px;border-radius:20px}.login-card h1{font-size:24px}.login-brand-name{font-size:23px}.login-description{font-size:12px}}
 @media(max-width:1000px){.sidebar{width:210px}.main-area{margin-left:210px;width:calc(100% - 210px)}.content{padding:24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
