@@ -97,11 +97,11 @@ const isCancelled = (order) =>
   ["cancelled", "canceled", "rejected"].includes(normalized(order.orderStatus));
 
 const isCOD = (order) => {
-  const payment = normalized(order.payment || order.paymentMethod);
-  return payment === "cod" || payment.includes("cash on delivery");
+  const payment = normalized(order.payment || order.paymentMethod || order.paymentType || order.payment_type || order.method || order.payMethod);
+  return payment === "cash" || payment.includes("cod") || payment.includes("cash on delivery");
 };
 
-const orderAmount = (order) => Number(order.totalPrice || 0);
+const orderAmount = (order) => Number(order.totalPrice ?? order.amount ?? order.grandTotal ?? order.total ?? order.payableAmount ?? 0) || 0;
 
 const itemSubtotal = (items = [], restaurantName = "", restaurantId = "") => {
   if (!Array.isArray(items)) return 0;
@@ -237,17 +237,13 @@ const OrderItemsBreakdown = ({ items = [], highlightRestaurantName = "", highlig
 };
 
 const FoodishLogo = ({ size = 28 }) => (
-  <svg width={size} height={size} viewBox="0 0 500 500" style={{ display: "inline-block", verticalAlign: "middle" }}>
-    <circle cx="250" cy="250" r="230" fill="#dc2626" />
-    <circle cx="250" cy="250" r="190" fill="none" stroke="#ffffff" strokeWidth="24" />
-    <path d="M162 160 v180 h20 v-180 z" fill="#ffffff" />
-    <path d="M202 160 v180 h20 v-180 z" fill="#ffffff" />
-    <path d="M242 160 v180 h20 v-180 z" fill="#ffffff" />
-    <path d="M162 230 h100 v20 h-100 z" fill="#ffffff" />
-    <path d="M162 340 h100 v30 c0 30 -100 30 -100 0 z" fill="#ffffff" />
-    <ellipse cx="360" cy="230" rx="45" ry="60" fill="#ffffff" />
-    <path d="M345 280 h30 v110 h-30 z" fill="#ffffff" />
-  </svg>
+  <img
+    src="/foodish-management-logo.png"
+    width={size}
+    height={size}
+    alt="Foodish Management"
+    style={{ display: "inline-block", verticalAlign: "middle", objectFit: "contain" }}
+  />
 );
 
 function App() {
@@ -491,6 +487,12 @@ function App() {
   });
 
   const [paperWorkDate, setPaperWorkDate] = useState(todayKey());
+  const [extraPaperWorkMembers, setExtraPaperWorkMembers] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("foodish_paperwork_extra_members") || "[]"); }
+    catch { return []; }
+  });
+  const [extraPaperWorkName, setExtraPaperWorkName] = useState("");
+  const [extraPaperWorkSalary, setExtraPaperWorkSalary] = useState("");
   const [historyStart, setHistoryStart] = useState(todayKey());
   const [historyEnd, setHistoryEnd] = useState(todayKey());
   const [historyType, setHistoryType] = useState("restaurant");
@@ -510,6 +512,12 @@ function App() {
       console.error(e);
     }
   }, [paperWorkRiderIds]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("foodish_paperwork_extra_members", JSON.stringify(extraPaperWorkMembers));
+    } catch (e) { console.error(e); }
+  }, [extraPaperWorkMembers]);
 
   // Background Auth & Firestore Sync starts immediately on mount
   useEffect(() => {
@@ -1061,9 +1069,31 @@ function App() {
     );
   }, [paperWorkTableRows]);
 
-  const calculatedProfit = useMemo(() => {
-    return paperWorkTotals.bill * 0.0941 + paperWorkTotals.charge;
-  }, [paperWorkTotals]);
+  const riderSalaryTotal = paperWorkTotals.charge; // Each selected rider salary is their earned delivery charge.
+  const extraMemberSalaryTotal = extraPaperWorkMembers.reduce((sum, member) => sum + Number(member.salary || 0), 0);
+  const totalSalary = riderSalaryTotal + extraMemberSalaryTotal;
+  const paperWorkSalaryPeople = [
+    ...paperWorkTableRows.map((row) => ({ id: `rider-${row.riderId}`, name: row.name, salary: Number(row.charge || 0) })),
+    ...extraPaperWorkMembers.map((member) => ({ id: `extra-${member.id}`, name: `${member.name} (Extra)`, salary: Number(member.salary || 0) })),
+  ];
+  const savedPaperWorkSalaryPeople = activePaperworkPrintReport ? [
+    ...(activePaperworkPrintReport.rows || []).map((row) => ({ id: `rider-${row.riderId}`, name: row.name, salary: Number(row.charge || 0) })),
+    ...(activePaperworkPrintReport.extraMembers || []).map((member) => ({ id: `extra-${member.id}`, name: `${member.name} (Extra)`, salary: Number(member.salary || 0) })),
+  ] : paperWorkSalaryPeople;
+  const grossProfitBeforeSalary = paperWorkTotals.bill * 0.0941 + paperWorkTotals.charge;
+  const calculatedProfit = grossProfitBeforeSalary - totalSalary;
+
+  function addExtraPaperWorkMember() {
+    const name = extraPaperWorkName.trim();
+    const salary = Number(extraPaperWorkSalary);
+    if (!name || !Number.isFinite(salary) || salary < 0) {
+      setNotice({ type: "error", text: "Enter extra member name and a valid salary amount." });
+      return;
+    }
+    setExtraPaperWorkMembers((prev) => [...prev, { id: `extra-${Date.now()}`, name, salary }]);
+    setExtraPaperWorkName("");
+    setExtraPaperWorkSalary("");
+  }
 
   async function saveCurrentPaperWorkReport() {
     setSaving(true);
@@ -1072,7 +1102,9 @@ function App() {
         date: paperWorkDate,
         savedAt: new Date().toISOString(),
         rows: JSON.parse(JSON.stringify(paperWorkTableRows)),
-        totals: { ...paperWorkTotals },
+        totals: { ...paperWorkTotals, riderSalary: riderSalaryTotal, extraSalary: extraMemberSalaryTotal, totalSalary },
+        extraMembers: extraPaperWorkMembers.map((member) => ({ ...member })),
+        grossProfitBeforeSalary,
         profit: calculatedProfit,
       };
 
@@ -1730,11 +1762,14 @@ function App() {
     return orders
       .filter((order) => {
         const matchesDate = dateKey(order.createdAt) === onlinePayDate;
-        const notCOD = !isCOD(order);
+        const rawMethod = order.payment || order.paymentMethod || order.paymentType || order.payment_type || order.method || order.payMethod || "";
+        const methodText = normalized(rawMethod);
+        const isOnlineMethod = methodText.includes("bkash") || methodText.includes("nagad") || methodText.includes("rocket") || methodText.includes("online") || methodText.includes("card") || methodText.includes("wallet");
+        const notCOD = !isCOD(order) && (isOnlineMethod || Boolean(methodText));
         if (!matchesDate || !notCOD) return false;
 
         if (onlinePayMethodFilter !== "all") {
-          const payMethod = normalized(order.payment || order.paymentMethod);
+          const payMethod = normalized(order.payment || order.paymentMethod || order.paymentType || order.payment_type || order.method || order.payMethod);
           if (!payMethod.includes(normalized(onlinePayMethodFilter))) return false;
         }
 
@@ -1757,8 +1792,8 @@ function App() {
     let otherSum = 0;
 
     onlinePaymentOrders.forEach((o) => {
-      const method = normalized(o.payment || o.paymentMethod);
-      const amt = orderAmount(o);
+      const method = normalized(o.payment || o.paymentMethod || o.paymentType || o.payment_type || o.method || o.payMethod);
+      const amt = Number(o.totalPrice ?? o.amount ?? o.grandTotal ?? o.total ?? o.payableAmount ?? 0) || 0;
       if (method.includes("bkash")) bkashSum += amt;
       else if (method.includes("nagad")) nagadSum += amt;
       else if (method.includes("rocket")) rocketSum += amt;
@@ -3059,7 +3094,7 @@ function App() {
                     </thead>
                     <tbody>
                       {onlinePaymentOrders.map((order) => {
-                        const paymentMethodName = order.payment || order.paymentMethod || "Online";
+                        const paymentMethodName = order.payment || order.paymentMethod || order.paymentType || order.payment_type || order.method || order.payMethod || "Online";
                         const norm = normalized(paymentMethodName);
                         const isBk = norm.includes("bkash");
                         const isNag = norm.includes("nagad");
@@ -3086,7 +3121,7 @@ function App() {
                                   {paymentMethodName}
                                 </span>
                                 <strong style={{ color: "#047857", fontSize: "14px" }}>
-                                  {money(orderAmount(order))}
+                                  {money(Number(order.totalPrice ?? order.amount ?? order.grandTotal ?? order.total ?? order.payableAmount ?? 0) || 0)}
                                 </strong>
                               </div>
                             </td>
@@ -5880,6 +5915,18 @@ function App() {
               </div>
             </div>
 
+            <div className="panel print-hide paperwork-extra-members-panel">
+              <div className="panel-head">
+                <div><h3>Extra Members & Salary</h3><p>Add staff members who are not riders and enter their salary for this statement.</p></div>
+              </div>
+              <div className="filter-bar" style={{ alignItems: "end" }}>
+                <label style={{ flex: 2 }}>Member Name<input value={extraPaperWorkName} onChange={(e) => setExtraPaperWorkName(e.target.value)} placeholder="Enter member name" /></label>
+                <label>Salary (৳)<input type="number" min="0" value={extraPaperWorkSalary} onChange={(e) => setExtraPaperWorkSalary(e.target.value)} placeholder="0" /></label>
+                <button type="button" className="primary-btn" onClick={addExtraPaperWorkMember}>+ Add Member</button>
+              </div>
+              {extraPaperWorkMembers.length > 0 && <div className="table-wrap"><table><thead><tr><th>Extra Member</th><th className="right">Salary</th><th className="right">Action</th></tr></thead><tbody>{extraPaperWorkMembers.map((member) => <tr key={member.id}><td>{member.name}</td><td className="right">{money(member.salary)}</td><td className="right"><button type="button" className="delete-btn" onClick={() => setExtraPaperWorkMembers((prev) => prev.filter((m) => m.id !== member.id))}>Remove</button></td></tr>)}</tbody><tfoot><tr><th>Total Extra Salary</th><th className="right">{money(extraMemberSalaryTotal)}</th><th /></tr></tfoot></table></div>}
+            </div>
+
             {firestorePaperReports.length > 0 && (
               <div className="panel print-hide">
                 <div className="panel-head">
@@ -6003,13 +6050,20 @@ function App() {
                 </div>
               </div>
 
+              <div className="paperwork-salary-summary" style={{ marginTop: "12px", border: "1px solid #d1d5db", borderRadius: "8px", padding: "10px", position: "relative", zIndex: 1 }}>
+                <h3 style={{ margin: "0 0 8px", fontSize: "14px" }}>Salary Details</h3>
+                <table><thead><tr><th>Member</th><th>Salary</th><th>Member</th><th>Salary</th></tr></thead><tbody>
+                  {savedPaperWorkSalaryPeople.map((person, index) => index % 2 === 0 ? <tr key={person.id}><td>{person.name}</td><td>{money(person.salary)}</td><td>{savedPaperWorkSalaryPeople[index + 1]?.name || ""}</td><td>{savedPaperWorkSalaryPeople[index + 1] ? money(savedPaperWorkSalaryPeople[index + 1].salary) : ""}</td></tr> : null)}
+                </tbody><tfoot><tr><th colSpan={3}>Total Salary Deducted</th><th>{money(activePaperworkPrintReport ? (activePaperworkPrintReport.totals?.totalSalary ?? ((activePaperworkPrintReport.totals?.riderSalary || (activePaperworkPrintReport.rows || []).reduce((sum, row) => sum + Number(row.charge || 0), 0)) + (activePaperworkPrintReport.totals?.extraSalary || (activePaperworkPrintReport.extraMembers || []).reduce((sum, member) => sum + Number(member.salary || 0), 0)))) : totalSalary)}</th></tr></tfoot></table>
+              </div>
+
               <div className="paperwork-profit-summary" style={{ marginTop: "30px", padding: "25px", background: "linear-gradient(135deg, #f0fdf4 0%, #e6f6ef 100%)", border: "2px solid #bbf7d0", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
-                <div style={{ fontSize: "14px", fontWeight: "800", color: "#15803d", letterSpacing: "1px" }}>PROFIT SUMMARY</div>
-                <div style={{ fontSize: "40px", fontWeight: "900", color: "#14532d", margin: "6px 0 0" }}>
+                <div style={{ fontSize: "14px", fontWeight: "800", color: "#15803d", letterSpacing: "1px" }}>NET PROFIT AFTER SALARY</div>
+                <div style={{ fontSize: "32px", fontWeight: "900", color: "#14532d", margin: "4px 0 0" }}>
                   {money(activePaperworkPrintReport ? activePaperworkPrintReport.profit : calculatedProfit)}
                 </div>
-                <div style={{ fontSize: "12px", fontWeight: "700", color: "#334155", marginTop: "4px" }}>
-                  Formula: (Total Bill × 9.41%) + Total Charge
+                <div style={{ fontSize: "10px", fontWeight: "700", color: "#334155", marginTop: "3px" }}>
+                  Gross Profit {money(activePaperworkPrintReport ? (activePaperworkPrintReport.grossProfitBeforeSalary ?? activePaperworkPrintReport.profit) : grossProfitBeforeSalary)} − Salary {money(activePaperworkPrintReport ? (activePaperworkPrintReport.totals?.totalSalary ?? 0) : totalSalary)} = Net Profit
                 </div>
               </div>
 
@@ -7262,6 +7316,7 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
     font-size: 8pt !important;
     table-layout: fixed !important;
   }
+  .online-payment-page table tbody tr { border-bottom: 0.25mm solid #cbd5e1 !important; }
   .online-payment-page table th,
   .online-payment-page table td {
     font-size: 8pt !important;
@@ -7296,6 +7351,24 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   #root .content:has(.paperwork-profit-summary) .printable-report-area {
     padding: 2mm !important;
   }
+  @page paperworkSheet { size: A4 landscape; margin: 4mm; }
+  #root .content:has(.paperwork-salary-summary) { page: paperworkSheet; }
+  #root .content:has(.paperwork-salary-summary) .print-header { margin-bottom: 3mm !important; }
+  #root .content:has(.paperwork-salary-summary) .print-header h1 { font-size: 16pt !important; }
+  #root .content:has(.paperwork-salary-summary) .print-header p { font-size: 9pt !important; }
+  #root .content:has(.paperwork-salary-summary) .printable-report-area { padding: 0 !important; }
+  #root .content:has(.paperwork-salary-summary) .table-wrap { overflow: visible !important; }
+  #root .content:has(.paperwork-salary-summary) table { font-size: 7.5pt !important; }
+  #root .content:has(.paperwork-salary-summary) table th,
+  #root .content:has(.paperwork-salary-summary) table td { font-size: 7.5pt !important; padding: 1mm 1.5mm !important; white-space: normal !important; }
+  .paperwork-salary-summary { margin-top: 2mm !important; padding: 2mm !important; }
+  .paperwork-salary-summary h3 { margin-bottom: 1mm !important; }
+  .paperwork-salary-summary table th,
+  .paperwork-salary-summary table td { padding: 0.8mm 1.5mm !important; }
+  #root .content:has(.paperwork-salary-summary) .paperwork-profit-summary { margin-top: 2mm !important; padding: 2mm !important; }
+  #root .content:has(.paperwork-salary-summary) .paperwork-profit-summary > div:nth-child(2) { font-size: 18pt !important; }
+  #root .content:has(.paperwork-salary-summary) .paperwork-profit-summary + div { margin-top: 4mm !important; padding-top: 2mm !important; }
+  #root .content:has(.paperwork-salary-summary) .paperwork-profit-summary + div > div { width: 35% !important; }
   .paperwork-profit-summary {
     margin-top: 5mm !important;
     padding: 4mm !important;
