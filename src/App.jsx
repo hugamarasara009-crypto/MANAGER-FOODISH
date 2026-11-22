@@ -6115,12 +6115,12 @@ function App() {
                 </div>
               </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: "80px", paddingTop: "20px", position: "relative", zIndex: 1 }}>
-                <div style={{ textAlign: "center", width: "220px" }}>
+              <div className="paperwork-signatures" style={{ display: "flex", justifyContent: "space-between", marginTop: "auto", paddingTop: "18mm", position: "relative", zIndex: 1 }}>
+                <div style={{ textAlign: "center", width: "42%" }}>
                   <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
                   <strong style={{ fontSize: "14px", color: "#0f172a" }}>Manager Sign</strong>
                 </div>
-                <div style={{ textAlign: "center", width: "220px" }}>
+                <div style={{ textAlign: "center", width: "42%" }}>
                   <div style={{ borderTop: "2px solid #0f172a", marginBottom: "8px" }} />
                   <strong style={{ fontSize: "14px", color: "#0f172a" }}>Director Sign</strong>
                 </div>
@@ -7352,36 +7352,58 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
 @media(max-width:520px){.global-note-fab{right:16px;bottom:16px;width:56px;height:56px;font-size:24px}.global-note-window{right:10px;bottom:10px;width:calc(100vw - 20px);height:min(520px,calc(100dvh - 20px));border-radius:17px}.global-note-header{padding:14px}.global-note-meta{font-size:9px;padding:10px 13px 6px}.global-note-editor-wrap{padding:7px 12px 11px}.global-note-footer{padding:10px 12px 12px}}
 @media print{.global-note-fab,.global-note-window{display:none!important}}
 
-/* Paper Work: compact responsive A4 layout; keep short reports visually filled. */
+/* Paper Work: balanced full-page A4 print layout. */
 @media print {
-  @page { size: A4 portrait; margin: 5mm; }
+  @page { size: A4 portrait; margin: 6mm; }
   .paperwork-page .printable-report-area {
-    box-sizing: border-box !important; width: 100% !important; min-height: 185mm !important;
-    display: flex !important; flex-direction: column !important; justify-content: flex-start !important;
-    padding: 2mm !important; margin: 0 !important; overflow: visible !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-height: 285mm !important;
+    height: auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    padding: 2mm 2.5mm !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    position: relative !important;
   }
-  .paperwork-page .print-header { margin: 0 0 2mm !important; }
-  .paperwork-page .print-header h1 { font-size: 12pt !important; line-height: 1.08 !important; margin: 0 0 .8mm !important; }
-  .paperwork-page .print-header p { font-size: 7.5pt !important; line-height: 1.05 !important; }
-  .paperwork-page .print-header img { width: 18px !important; height: 18px !important; }
+  .paperwork-page .print-header { margin: 0 0 3mm !important; }
+  .paperwork-page .print-header h1 { font-size: 14pt !important; line-height: 1.12 !important; margin: 0 0 1mm !important; }
+  .paperwork-page .print-header p { font-size: 8pt !important; line-height: 1.1 !important; }
+  .paperwork-page .print-header img { width: 24px !important; height: 24px !important; }
   .paperwork-page .table-wrap { overflow: visible !important; margin: 0 !important; }
-  .paperwork-page table { width: 100% !important; border-collapse: collapse !important; table-layout: fixed !important; font-size: 6.7pt !important; }
+  .paperwork-page table {
+    width: 100% !important; border-collapse: collapse !important;
+    table-layout: fixed !important; font-size: 7.3pt !important;
+  }
   .paperwork-page table th, .paperwork-page table td {
-    font-size: 6.7pt !important; padding: .65mm .7mm !important; line-height: 1.03 !important;
-    white-space: normal !important; overflow-wrap: anywhere !important;
+    font-size: 7.3pt !important; padding: 1.15mm 1mm !important;
+    line-height: 1.12 !important; white-space: normal !important;
+    overflow-wrap: anywhere !important;
   }
-  .paperwork-page .paperwork-salary-print { margin-top: 1.5mm !important; break-inside: auto !important; page-break-inside: auto !important; }
-  .paperwork-page .paperwork-salary-print h2 { font-size: 8pt !important; line-height: 1.05 !important; margin: 0 0 .8mm !important; }
+  .paperwork-page .paperwork-salary-print { margin-top: 3mm !important; break-inside: auto !important; page-break-inside: auto !important; }
+  .paperwork-page .paperwork-salary-print h2 { font-size: 9pt !important; line-height: 1.1 !important; margin: 0 0 1.2mm !important; }
   .paperwork-page .paperwork-profit-summary {
-    margin: 1.5mm 0 0 !important; padding: 1.5mm 2mm !important; border-width: .6px !important;
-    border-radius: 1.5mm !important; break-inside: avoid !important; page-break-inside: avoid !important;
+    margin: 3mm 0 0 !important; padding: 3mm 3.5mm !important;
+    border-width: 1px !important; border-radius: 2mm !important;
+    break-inside: avoid !important; page-break-inside: avoid !important;
   }
-  .paperwork-page .paperwork-profit-summary > div:first-child { font-size: 7pt !important; line-height: 1.05 !important; }
-  .paperwork-page .paperwork-profit-summary > div:nth-child(2) { font-size: 14pt !important; line-height: 1.05 !important; margin: .5mm 0 0 !important; }
-  .paperwork-page .paperwork-profit-summary > div:nth-child(3) { font-size: 6.3pt !important; line-height: 1.08 !important; margin-top: .5mm !important; }
-  .paperwork-page .paperwork-signatures { margin-top: auto !important; padding-top: 12mm !important; break-inside: avoid !important; page-break-inside: avoid !important; }
-  .paperwork-page .paperwork-signatures strong { font-size: 7pt !important; }
-  .paperwork-page .pdf-watermark-logo { width: 54% !important; opacity: .09 !important; }
+  .paperwork-page .paperwork-profit-summary > div:first-child { font-size: 8pt !important; line-height: 1.1 !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(2) { font-size: 19pt !important; line-height: 1.1 !important; margin: 1mm 0 0 !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(3) { font-size: 7pt !important; line-height: 1.25 !important; margin-top: 1mm !important; }
+  .paperwork-page .paperwork-signatures {
+    margin-top: auto !important; padding-top: 18mm !important;
+    break-inside: avoid !important; page-break-inside: avoid !important;
+  }
+  .paperwork-page .paperwork-signatures strong { font-size: 8pt !important; }
+  .paperwork-page .paperwork-signatures > div { width: 42% !important; }
+  .paperwork-page .pdf-watermark-logo {
+    display: block !important; position: absolute !important;
+    top: 50% !important; left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    width: 58% !important; opacity: .075 !important;
+    pointer-events: none !important; z-index: 0 !important;
+  }
   .paperwork-page .pdf-watermark-logo img { width: 100% !important; height: auto !important; }
   .paperwork-page .panel { margin: 0 !important; padding: 0 !important; }
   .paperwork-page .print-hide { display: none !important; }
