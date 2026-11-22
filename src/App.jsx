@@ -521,6 +521,19 @@ function App() {
   });
 
   const [paperWorkDate, setPaperWorkDate] = useState(todayKey());
+  const [paperWorkSalaries, setPaperWorkSalaries] = useState(() => {
+    try { const saved = localStorage.getItem("foodish_paperwork_salaries"); return saved ? JSON.parse(saved) : []; } catch { return []; }
+  });
+  const [salaryNameInput, setSalaryNameInput] = useState("");
+  const [salaryAmountInput, setSalaryAmountInput] = useState("");
+  useEffect(() => { try { localStorage.setItem("foodish_paperwork_salaries", JSON.stringify(paperWorkSalaries)); } catch (error) { console.error(error); } }, [paperWorkSalaries]);
+  const addPaperWorkSalary = () => {
+    const name = salaryNameInput.trim(); const amount = Number(salaryAmountInput);
+    if (!name || !Number.isFinite(amount) || amount < 0) { setNotice({ type: "error", text: "Person name and valid salary amount দিন।" }); return; }
+    setPaperWorkSalaries(prev => [...prev, { id: `salary-${Date.now()}`, name, amount }]);
+    setSalaryNameInput(""); setSalaryAmountInput("");
+  };
+  const removePaperWorkSalary = (id) => setPaperWorkSalaries(prev => prev.filter(item => item.id !== id));
   const [historyStart, setHistoryStart] = useState(todayKey());
   const [historyEnd, setHistoryEnd] = useState(todayKey());
   const [historyType, setHistoryType] = useState("restaurant");
@@ -1091,9 +1104,9 @@ function App() {
     );
   }, [paperWorkTableRows]);
 
-  const calculatedProfit = useMemo(() => {
-    return paperWorkTotals.bill * 0.0941 + paperWorkTotals.charge;
-  }, [paperWorkTotals]);
+  const grossProfit = useMemo(() => paperWorkTotals.bill * 0.0941 + paperWorkTotals.charge, [paperWorkTotals]);
+  const totalPaperWorkSalary = paperWorkSalaries.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const calculatedProfit = grossProfit - totalPaperWorkSalary;
 
   async function saveCurrentPaperWorkReport() {
     setSaving(true);
@@ -1103,6 +1116,9 @@ function App() {
         savedAt: new Date().toISOString(),
         rows: JSON.parse(JSON.stringify(paperWorkTableRows)),
         totals: { ...paperWorkTotals },
+        salaries: JSON.parse(JSON.stringify(paperWorkSalaries)),
+        salaryTotal: totalPaperWorkSalary,
+        grossProfit,
         profit: calculatedProfit,
       };
 
@@ -1147,7 +1163,13 @@ function App() {
     });
 
     csvContent += `\nAll Total,,${report.totals.online},${report.totals.bill},${report.totals.charge},${report.totals.collect}\n`;
-    csvContent += `\nProfit Summary (Formula: Bill*9.41% + Charge),,${report.profit}\n`;
+    csvContent += `\nSalary Details\nSL,Person Name,Salary\n`;
+    (report.salaries || []).forEach((person, index) => {
+      csvContent += `${index + 1},"${String(person.name || "").replace(/"/g, '""')}",${Number(person.amount || 0)}\n`;
+    });
+    csvContent += `Total Salary,,${report.salaryTotal ?? 0}\n`;
+    csvContent += `Gross Profit,,${report.grossProfit ?? report.profit}\n`;
+    csvContent += `Net Profit (Gross Profit - Salary),,${report.profit}\n`;
 
     downloadCsvFile(`paper_work_report_${report.date}.csv`, csvContent);
   };
@@ -5910,6 +5932,16 @@ function App() {
               </div>
             </div>
 
+            <div className="panel print-hide" style={{ marginTop: 16 }}>
+              <div className="panel-head"><div><h3>Rider & Staff Salary</h3><p>নাম ও বেতন যোগ করুন। যতজন দরকার add করতে পারবেন।</p></div></div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+                <label style={{ flex: "1 1 220px" }}>Person Name<input value={salaryNameInput} onChange={e => setSalaryNameInput(e.target.value)} placeholder="যেমন: Rahim / Rider" /></label>
+                <label style={{ flex: "1 1 160px" }}>Salary (৳)<input type="number" min="0" value={salaryAmountInput} onChange={e => setSalaryAmountInput(e.target.value)} placeholder="Salary amount" /></label>
+                <button type="button" className="primary-btn" onClick={addPaperWorkSalary}>＋ Add Salary</button>
+              </div>
+              {paperWorkSalaries.length > 0 && <div className="table-wrap" style={{ marginTop: 14 }}><table><thead><tr><th>SL</th><th>Person Name</th><th>Salary</th><th>Action</th></tr></thead><tbody>{paperWorkSalaries.map((item,index)=><tr key={item.id}><td>{index+1}</td><td><strong>{item.name}</strong></td><td>{money(item.amount)}</td><td><button type="button" className="delete-btn" onClick={()=>removePaperWorkSalary(item.id)}>Remove</button></td></tr>)}</tbody><tfoot><tr><th colSpan={2}>Total Salary</th><th>{money(totalPaperWorkSalary)}</th><th /></tr></tfoot></table></div>}
+            </div>
+
             {firestorePaperReports.length > 0 && (
               <div className="panel print-hide">
                 <div className="panel-head">
@@ -6033,13 +6065,23 @@ function App() {
                 </div>
               </div>
 
+              <div className="paperwork-salary-print" style={{ marginTop: 22, position: "relative", zIndex: 1 }}>
+                <h2 style={{ fontSize: 20, margin: "0 0 10px", color: "#0f172a" }}>RIDER & STAFF SALARY DETAILS</h2>
+                <table><thead><tr><th>SL</th><th>Person Name</th><th>Salary Amount</th></tr></thead><tbody>
+                  {(activePaperworkPrintReport ? (activePaperworkPrintReport.salaries || []) : paperWorkSalaries).map((item,index)=><tr key={item.id || `${item.name}-${index}`}><td>{index+1}</td><td><strong>{item.name}</strong></td><td>{money(item.amount)}</td></tr>)}
+                  {(activePaperworkPrintReport ? (activePaperworkPrintReport.salaries || []) : paperWorkSalaries).length===0 && <tr><td colSpan={3}>No salary added</td></tr>}
+                </tbody><tfoot><tr><th colSpan={2}>TOTAL SALARY</th><th>{money(activePaperworkPrintReport ? (activePaperworkPrintReport.salaryTotal ?? 0) : totalPaperWorkSalary)}</th></tr></tfoot></table>
+              </div>
+
               <div className="paperwork-profit-summary" style={{ marginTop: "30px", padding: "25px", background: "linear-gradient(135deg, #f0fdf4 0%, #e6f6ef 100%)", border: "2px solid #bbf7d0", borderRadius: "12px", textAlign: "center", position: "relative", zIndex: 1 }}>
                 <div style={{ fontSize: "14px", fontWeight: "800", color: "#15803d", letterSpacing: "1px" }}>PROFIT SUMMARY</div>
                 <div style={{ fontSize: "40px", fontWeight: "900", color: "#14532d", margin: "6px 0 0" }}>
                   {money(activePaperworkPrintReport ? activePaperworkPrintReport.profit : calculatedProfit)}
                 </div>
-                <div style={{ fontSize: "12px", fontWeight: "700", color: "#334155", marginTop: "4px" }}>
-                  Formula: (Total Bill × 9.41%) + Total Charge
+                <div style={{ fontSize: "13px", fontWeight: "700", color: "#334155", marginTop: "8px", lineHeight: 1.8 }}>
+                  Gross Profit: {money(activePaperworkPrintReport ? (activePaperworkPrintReport.grossProfit ?? activePaperworkPrintReport.profit) : grossProfit)}
+                  <br />Total Salary: − {money(activePaperworkPrintReport ? (activePaperworkPrintReport.salaryTotal ?? 0) : totalPaperWorkSalary)}
+                  <br />Net Profit = Gross Profit − Total Salary
                 </div>
               </div>
 
@@ -7203,6 +7245,7 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   .printable-report-area, .history-print-box { width: 100% !important; max-width: 100% !important; height: auto !important; min-height: 0 !important; padding: 2mm !important; margin: 0 !important; border: none !important; border-radius: 0 !important; position: relative !important; overflow: visible !important; background: transparent !important; box-sizing: border-box !important; page-break-before: avoid !important; page-break-after: auto !important; }
   .pdf-watermark-logo { display: block !important; position: absolute !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) !important; width: 55% !important; height: auto !important; opacity: .075 !important; pointer-events: none !important; z-index: 0 !important; }
   .pdf-watermark-logo img { width: 100% !important; height: auto !important; max-width: 100% !important; }
+  .paperwork-page .pdf-watermark-logo { opacity: .10 !important; width: 62% !important; }
   .print-header, .online-payment-print-header { position: relative !important; z-index: 2 !important; margin: 0 0 3mm !important; }
   .print-header h1, .online-payment-print-header h1 { font-size: 14pt !important; margin: 0 0 1mm !important; }
   .print-header p, .online-payment-print-header p { font-size: 8pt !important; margin: 0 !important; }
@@ -7221,6 +7264,21 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   .paperwork-page .paperwork-signatures { margin-top: 6mm !important; padding-top: 2mm !important; break-inside: avoid !important; page-break-inside: avoid !important; }
   .paperwork-page .paperwork-signatures strong { font-size: 8pt !important; }
   .paperwork-page .paperwork-signatures > div { width: 42% !important; }
+  @page { size: A4 portrait; margin: 10mm; }
+  .paperwork-page .printable-report-area { padding: 5mm !important; min-height: 270mm !important; }
+  .paperwork-page .print-header { margin-bottom: 8mm !important; }
+  .paperwork-page .print-header h1 { font-size: 21pt !important; }
+  .paperwork-page .print-header p { font-size: 12pt !important; }
+  .paperwork-page .print-header img { width: 32px !important; height: 32px !important; }
+  .paperwork-page .table-wrap { overflow: visible !important; }
+  .paperwork-page table { font-size: 11pt !important; table-layout: auto !important; }
+  .paperwork-page table th, .paperwork-page table td { font-size: 11pt !important; padding: 3mm 2.5mm !important; line-height: 1.45 !important; }
+  .paperwork-page .paperwork-salary-print { break-inside: avoid !important; page-break-inside: avoid !important; }
+  .paperwork-page .paperwork-salary-print h2 { font-size: 14pt !important; margin-bottom: 3mm !important; }
+  .paperwork-page .paperwork-profit-summary { margin-top: 7mm !important; padding: 6mm !important; }
+  .paperwork-page .paperwork-profit-summary > div:first-child { font-size: 12pt !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(2) { font-size: 27pt !important; }
+  .paperwork-page .paperwork-profit-summary > div:nth-child(3) { font-size: 11pt !important; }
   /* Portrait online payment summary: keep all four collection boxes visible. */
   .online-payment-page .stats-grid { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 2mm !important; margin: 0 0 3mm !important; }
   .online-payment-page .stats-grid .stat-card { min-height: 0 !important; padding: 2mm 3mm !important; border-radius: 2mm !important; box-shadow: none !important; break-inside: avoid !important; page-break-inside: avoid !important; }
