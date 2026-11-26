@@ -3906,8 +3906,8 @@ function App() {
 
                       <div
                         style={{
-                          background: "linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%)",
-                          border: "2.5px solid #10b981",
+                          background: "linear-gradient(135deg, #bbf7d0 0%, #86efac 100%)",
+                          border: "2.5px solid #059669",
                           borderRadius: "16px",
                           padding: "22px",
                           marginBottom: "20px",
@@ -5009,8 +5009,8 @@ function App() {
 
                       <div
                         style={{
-                          background: "linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%)",
-                          border: "2.5px solid #10b981",
+                          background: "linear-gradient(135deg, #dcfce7 0%, #d1fae5 100%)",
+                          border: "2.5px solid #059669",
                           borderRadius: "16px",
                           padding: "22px",
                           marginBottom: "20px",
@@ -7359,7 +7359,7 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   .panel { border: none !important; box-shadow: none !important; padding: 0 !important; margin: 0 0 2mm !important; background: transparent !important; }
   .printable-report-area, .history-print-box { width: 100% !important; max-width: 100% !important; height: auto !important; min-height: 0 !important; padding: 2mm !important; margin: 0 !important; border: none !important; border-radius: 0 !important; position: relative !important; overflow: visible !important; background: transparent !important; box-sizing: border-box !important; page-break-before: avoid !important; page-break-after: auto !important; }
   .pdf-watermark-logo { display: block !important; position: absolute !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) !important; width: 55% !important; height: auto !important; opacity: .075 !important; pointer-events: none !important; z-index: 0 !important; }
-  .pdf-watermark-logo img { width: 100% !important; height: auto !important; max-width: 100% !important; }
+  .pdf-watermark-logo img { width: 100% !important; height: auto !important; max-width: 100% !important; filter: saturate(1.48) contrast(1.18) !important; }
   .paperwork-page .pdf-watermark-logo { opacity: .10 !important; width: 62% !important; }
   .print-header, .online-payment-print-header { position: relative !important; z-index: 2 !important; margin: 0 0 3mm !important; }
   .print-header h1, .online-payment-print-header h1 { font-size: 14pt !important; margin: 0 0 1mm !important; }
@@ -7709,6 +7709,58 @@ td strong{color:#0f172a;font-size:14px;font-weight:800}
   .paperwork-page .pdf-watermark-logo img { width: 100% !important; height: auto !important; }
   .paperwork-page .print-hide { display: none !important; }
 }
+
+
+/* FOODISH: final color balance — lighter table green, richer logo red, deeper COD panel. */
+.brand-mark img, .login-brand-mark img { filter: saturate(1.48) contrast(1.18) !important; }
+
+@media print {
+  /* Applied to every report wrapper, including saved reports and Paper Work. */
+  .pdf-watermark-logo {
+    display: block !important;
+    position: absolute !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    width: 58% !important;
+    height: auto !important;
+    opacity: .14 !important;
+    pointer-events: none !important;
+    z-index: 0 !important;
+    filter: saturate(1.48) contrast(1.18) !important;
+  }
+  .pdf-watermark-logo img { width: 100% !important; height: auto !important; max-width: 100% !important; filter: saturate(1.48) contrast(1.18) !important; }
+  .printable-report-area, .history-print-box { position: relative !important; }
+  .print-header, .online-payment-print-header, .printable-report-area > :not(.pdf-watermark-logo),
+  .history-print-box > :not(.pdf-watermark-logo) { position: relative; z-index: 1; }
+  .print-header h1, .online-payment-print-header h1 { color: #064e3b !important; }
+  .paperwork-page .pdf-watermark-logo,
+  .online-payment-page .pdf-watermark-logo,
+  .history-print-box .pdf-watermark-logo { opacity: .14 !important; width: 58% !important; }
+}
+
+/* Final requested print color tuning:
+   - restore the serial-wise table header/footer to their original colors
+   - deepen the FOODISH red mark in the logo/watermark
+   - make only the Total COD summary box a little deeper green */
+.brand-mark img,
+.login-brand-mark img,
+.print-header svg,
+.history-print-box .pdf-watermark-logo svg,
+.pdf-watermark-logo svg {
+  filter: saturate(1.9) contrast(1.28) !important;
+}
+
+@media print {
+  .history-print-box > div[style*="#dcfce7"],
+  .history-print-box > div[style*="linear-gradient(135deg, #dcfce7"] {
+    background: linear-gradient(135deg, #bbf7d0 0%, #a7f3d0 100%) !important;
+    border-color: #059669 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
 
 `;
 
